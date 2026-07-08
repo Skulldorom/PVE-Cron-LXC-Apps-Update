@@ -1,5 +1,7 @@
 # PVE-Cron-LXC-Apps-Update
 
+> **Disclaimer:** This project is NOT affiliated with, endorsed by, or connected to [community-scripts](https://community-scripts.org) / Proxmox VE Helper Scripts. It is an independent wrapper that automates their `update-apps.sh` tool.
+
 Automates weekly updates of community-scripts-managed LXC containers on a Proxmox VE node. Runs the official `update-apps.sh` with all env vars preset, strips the per-container verbose logging, and optionally sends the final summary table via **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)**.
 
 ## Quick Start
