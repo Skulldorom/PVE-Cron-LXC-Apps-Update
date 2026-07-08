@@ -182,6 +182,20 @@ view_config() {
   read -rp "Press Enter to continue..."
 }
 
+# ── Extract args from crontab entry ───────────────────────────────────────────
+get_cron_args() {
+  # Returns container IDs and backup storage from the cron entry.
+  # Parses the quoted args: ... "/usr/local/bin/update-community-apps.sh" "101,102" "local"
+  local entry
+  entry=$(crontab -l -u root 2>/dev/null | grep "${LOCAL_SCRIPT}" | head -1)
+  if [ -z "$entry" ]; then
+    return 1
+  fi
+  CRON_CT_IDS=$(echo "$entry" | grep -oP '"([^"]+)"' | head -1 | tr -d '"')
+  CRON_STORAGE=$(echo "$entry" | grep -oP '"([^"]+)"' | tail -1 | tr -d '"')
+  [ -n "$CRON_CT_IDS" ] && [ -n "$CRON_STORAGE" ]
+}
+
 # ── Run now ──────────────────────────────────────────────────────────────────
 run_now() {
   if [ ! -f "$LOCAL_SCRIPT" ]; then
@@ -189,12 +203,57 @@ run_now() {
     read -rp "Press Enter to continue..."
     return
   fi
+
+  local ct_ids storage
+  if get_cron_args; then
+    ct_ids="$CRON_CT_IDS"
+    storage="$CRON_STORAGE"
+  else
+    ct_ids=$(whiptail --backtitle "Community Apps Update" --title "Run Now" \
+      --inputbox "Enter container IDs (comma-separated):" 10 50 "101,102" \
+      3>&1 1>&2 2>&3) || return
+    storage=$(whiptail --backtitle "Community Apps Update" --title "Run Now" \
+      --inputbox "Enter backup storage:" 10 50 "local" \
+      3>&1 1>&2 2>&3) || return
+  fi
+
   clear
   msg_info "Running update script now..."
   echo ""
-  bash "$LOCAL_SCRIPT" | tee -a "$LOG_FILE" 2>&1
+  NOTIFY="${NOTIFY:-yes}" bash "$LOCAL_SCRIPT" "$ct_ids" "$storage" | tee -a "$LOG_FILE" 2>&1
   echo ""
   msg_ok "Run completed. Log appended to ${LOG_FILE}"
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
+# ── Dry run ──────────────────────────────────────────────────────────────────
+dry_run() {
+  if [ ! -f "$LOCAL_SCRIPT" ]; then
+    msg_error "No script installed. Use 'Install & Configure' first."
+    read -rp "Press Enter to continue..."
+    return
+  fi
+
+  local ct_ids storage
+  if get_cron_args; then
+    ct_ids="$CRON_CT_IDS"
+    storage="$CRON_STORAGE"
+  else
+    ct_ids=$(whiptail --backtitle "Community Apps Update" --title "Dry Run" \
+      --inputbox "Enter container IDs (comma-separated):" 10 50 "101,102" \
+      3>&1 1>&2 2>&3) || return
+    storage=$(whiptail --backtitle "Community Apps Update" --title "Dry Run" \
+      --inputbox "Enter backup storage:" 10 50 "local" \
+      3>&1 1>&2 2>&3) || return
+  fi
+
+  clear
+  msg_info "Running dry-run (check only — no changes)..."
+  echo ""
+  NOTIFY=no bash "$LOCAL_SCRIPT" "$ct_ids" "$storage" dry-run | tee -a "$LOG_FILE" 2>&1
+  echo ""
+  msg_ok "Dry-run completed. Log appended to ${LOG_FILE}"
   echo ""
   read -rp "Press Enter to continue..."
 }
@@ -471,8 +530,9 @@ main_menu() {
 
     local choice
     choice=$(whiptail --backtitle "Community Apps Update" --title "Main Menu" \
-      --menu "Select an option:" 18 60 7 \
+      --menu "Select an option:" 19 60 8 \
       "Install" "Install script & configure cron schedule" \
+      "Dry Run" "Check for updates without applying (dry-run)" \
       "Update"  "Update local script from GitHub" \
       "Remove"  "Remove cron schedule & local script" \
       "Status"  "Show installation status & last run" \
@@ -483,7 +543,8 @@ main_menu() {
 
     case "$choice" in
       "Install") install_and_configure ;;
-      "Update")  update_script ;;
+      "Dry Run") dry_run ;;
+      "Update")  update_script ;; 
       "Remove")  remove_all ;;
       "Status")  show_status ;;
       "Run Now") run_now ;;
