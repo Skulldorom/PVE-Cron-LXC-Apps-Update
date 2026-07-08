@@ -84,11 +84,19 @@ discover_containers() {
 # ── Discover backup-capable storages ─────────────────────────────────────────
 discover_storages() {
   STORAGE_ITEMS=()
-  local storages
-  storages=$(awk '
+  local storages node_name
+  node_name="$(hostname -s)"
+  storages=$(awk -v node="$node_name" '
     /^[a-z]+:/ {
       if (name != "") {
-        if (has_backup || (!has_content && type == "dir")) print name
+        # Node check: if nodes is set, current node must be in the list.
+        # If nodes is empty (no restriction), the storage is available to all.
+        local_ok = 1
+        if (nodes != "") {
+          local_ok = 0
+          if (nodes ~ "(^|,)" node "(,|$)") local_ok = 1
+        }
+        if (local_ok && (has_backup || (!has_content && type == "dir"))) print name
       }
       split($0, a, ":")
       type = a[1]
@@ -96,14 +104,25 @@ discover_storages() {
       gsub(/^[ \t]+|[ \t]+$/, "", name)
       has_content = 0
       has_backup = 0
+      nodes = ""
     }
     /^[ \t]*content/ {
       has_content = 1
       if ($0 ~ /backup/) has_backup = 1
     }
+    /^[ \t]*nodes/ {
+      # Capture comma-separated node list (e.g. "nodes pve1,pve2")
+      sub(/^[ \t]*nodes[ \t]+/, "")
+      nodes = $0
+    }
     END {
       if (name != "") {
-        if (has_backup || (!has_content && type == "dir")) print name
+        local_ok = 1
+        if (nodes != "") {
+          local_ok = 0
+          if (nodes ~ "(^|,)" node "(,|$)") local_ok = 1
+        }
+        if (local_ok && (has_backup || (!has_content && type == "dir"))) print name
       }
     }
   ' /etc/pve/storage.cfg)
