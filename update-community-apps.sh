@@ -83,12 +83,18 @@ if [ "$NOTIFY" = "yes" ]; then
   [ $EXIT_CODE -eq 0 ] && SEVERITY="notice"
   [ $EXIT_CODE -gt 0 ] && SEVERITY="error"
 
-  jq -n \
+  # Post to notifier — log HTTP status on failure so silent drops are visible
+  HTTP_CODE=$(jq -n \
     --arg title "$TITLE" \
     --arg msg "$MESSAGE" \
     --arg severity "$SEVERITY" \
     '{title: $title, message: $msg, severity: $severity}' \
-    | curl -s -X POST -H "Content-Type: application/json" -d @- "$NOTIFIER_URL" >/dev/null 2>&1 || true
+    | curl -s -o /dev/null -w '%{http_code}' \
+      -X POST -H "Content-Type: application/json" -d @- "$NOTIFIER_URL" 2>/dev/null) || true
+
+  if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "202" ]; then
+    echo "[WARN]  Notifier returned HTTP ${HTTP_CODE:-000} — notification may not have been delivered" >&2
+  fi
 fi
 
 exit $EXIT_CODE
