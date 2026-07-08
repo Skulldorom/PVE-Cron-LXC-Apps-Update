@@ -24,13 +24,12 @@ banner() {
   clear
   cat <<'BANNER'
 
-   ___  __  ___  ____  _  _  __    ___  ____  ____  _  _
-  / __)/  \/ __)(  __)/ )( \(  )  / __)(_  _)(  _ \/ )( \
- ( (__(  O ) _ \ ) _) ) \/ (/ (_/\\__ \  )(   )   /) \/ (
-  \___)\__/\___/(____)\____/\____/(____/ (__) (__\_)\____/
+  Community Apps Update — Cron Installer
+  https://github.com/Skulldorom/PVE-Cron-LXC-Apps-Update
 
-   Community Apps Update — Cron Installer
-   https://github.com/Skulldorom/PVE-Cron-LXC-Apps-Update
+  DISCLAIMER: This project is NOT affiliated with, endorsed by, or
+  connected to community-scripts / Proxmox VE Helper Scripts in any way.
+  It is an independent wrapper that automates their update-apps.sh tool.
 
 BANNER
 }
@@ -185,14 +184,14 @@ view_config() {
 # ── Extract args from crontab entry ───────────────────────────────────────────
 get_cron_args() {
   # Returns container IDs and backup storage from the cron entry.
-  # Parses the quoted args: ... "/usr/local/bin/update-community-apps.sh" "101,102" "local"
+  # Splits on double quotes: cron line has "...script.sh" "101,102" "storage" ...
   local entry
   entry=$(crontab -l -u root 2>/dev/null | grep "${LOCAL_SCRIPT}" | head -1)
   if [ -z "$entry" ]; then
     return 1
   fi
-  CRON_CT_IDS=$(echo "$entry" | grep -oP '"([^"]+)"' | head -1 | tr -d '"')
-  CRON_STORAGE=$(echo "$entry" | grep -oP '"([^"]+)"' | tail -1 | tr -d '"')
+  CRON_CT_IDS=$(echo "$entry" | cut -d'"' -f2)
+  CRON_STORAGE=$(echo "$entry" | cut -d'"' -f4)
   [ -n "$CRON_CT_IDS" ] && [ -n "$CRON_STORAGE" ]
 }
 

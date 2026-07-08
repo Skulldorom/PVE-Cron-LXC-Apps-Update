@@ -22,9 +22,9 @@ NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 LOG_FILE="/var/log/update-community-apps-$(date '+%Y%m%d_%H%M%S').log"
 
-UPDATE_CMD="var_container=$CONTAINERS \
+UPDATE_CMD="var_container=\"$CONTAINERS\" \
   var_backup=yes \
-  var_backup_storage=$BACKUP_STORAGE \
+  var_backup_storage=\"$BACKUP_STORAGE\" \
   var_unattended=yes \
   var_skip_confirm=yes \
   var_continue_on_error=yes \
