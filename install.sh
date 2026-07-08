@@ -419,7 +419,7 @@ install_and_configure() {
 
   # ── Step 5: Notifications ────────────────────────────────────────────────
   if whiptail --backtitle "Community Apps Update" --title "Notifications" \
-    --yesno "Enable Discord notifications?\n\nSends summary table to proxmox-discord-notifier.\n(Requires https://github.com/Skulldorom/proxmox-discord-notifier)" 10 65; then
+    --yesno "Enable notifications?\n\nSends the summary table to your configured\nnotification endpoint on completion." 10 60; then
     NOTIFY="yes"
   else
     NOTIFY="no"
@@ -481,7 +481,7 @@ install_and_configure() {
   msg_ok "Installed to ${LOCAL_SCRIPT}"
 
   # ── Step 9: Add crontab ──────────────────────────────────────────────────
-  remove_cron  # remove any existing entry first
+  remove_cron || true  # remove any existing entry first (ok if none)
 
   local cron_entry cron_env
   cron_env="NOTIFY=${NOTIFY}"
