@@ -70,6 +70,7 @@ This launches an interactive whiptail menu that:
 | Option | Description |
 |--------|-------------|
 | **Install** | Discover containers & storage, configure schedule, install cron |
+| **Dry Run** | Check for updates without applying (reads args from cron or prompts) |
 | **Update** | Diff and pull latest `update-community-apps.sh` from GitHub |
 | **Remove** | Remove cron schedule and local script |
 | **Status** | Show installed state, cron entry, and last run |
