@@ -219,7 +219,7 @@ run_now() {
   clear
   msg_info "Running update script now..."
   echo ""
-  NOTIFY="${NOTIFY:-yes}" bash "$LOCAL_SCRIPT" "$ct_ids" "$storage" | tee -a "$LOG_FILE" 2>&1
+  NOTIFY="${NOTIFY:-yes}" bash "$LOCAL_SCRIPT" "$ct_ids" "$storage" 2>&1 | tee -a "$LOG_FILE"
   echo ""
   msg_ok "Run completed. Log appended to ${LOG_FILE}"
   echo ""
@@ -250,7 +250,7 @@ dry_run() {
   clear
   msg_info "Running dry-run (check only — no changes)..."
   echo ""
-  NOTIFY=no bash "$LOCAL_SCRIPT" "$ct_ids" "$storage" dry-run | tee -a "$LOG_FILE" 2>&1
+  NOTIFY="${NOTIFY:-yes}" bash "$LOCAL_SCRIPT" "$ct_ids" "$storage" dry-run 2>&1 | tee -a "$LOG_FILE"
   echo ""
   msg_ok "Dry-run completed. Log appended to ${LOG_FILE}"
   echo ""
