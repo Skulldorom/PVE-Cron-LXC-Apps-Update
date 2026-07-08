@@ -37,8 +37,8 @@ UPDATE_CMD="$UPDATE_CMD \
   bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh)\""
 
 set +e
-eval "$UPDATE_CMD" > "$LOG_FILE" 2>&1
-EXIT_CODE=$?
+eval "$UPDATE_CMD" 2>&1 | tee "$LOG_FILE"
+EXIT_CODE=${PIPESTATUS[0]}
 set -e
 
 # Extract summary table (everything between first and last ━━ separator)
@@ -54,6 +54,12 @@ TABLE=$(awk '
     }
   }
 ' "$LOG_FILE")
+
+# Fallback: if separator parsing fails (e.g. upstream format change),
+# send the last 40 lines so you always get something useful
+if [ -z "$TABLE" ]; then
+  TABLE=$(tail -40 "$LOG_FILE")
+fi
 
 EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FILE" || true)
 

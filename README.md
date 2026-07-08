@@ -65,6 +65,23 @@ This launches an interactive whiptail menu that:
 | `/var/log/update-community-apps-*.log` | Per-run full output logs |
 | `/var/log/update-community-apps-cron.log` | Cron output log |
 
+### Log Rotation
+
+Each run creates a timestamped log file. To prevent unbounded accumulation, install the included logrotate config:
+
+```bash
+cp logrotate.conf /etc/logrotate.d/update-community-apps
+```
+
+Or download directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update/main/logrotate.conf \
+  -o /etc/logrotate.d/update-community-apps
+```
+
+This keeps 4 weekly rotations with compression.
+
 ## Installer Menu Options
 
 | Option | Description |
