@@ -11,6 +11,7 @@ REPO_URL="https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update/
 SCRIPT_URL="${REPO_URL}/update-community-apps.sh"
 LOCAL_SCRIPT="/usr/local/bin/update-community-apps.sh"
 LOG_FILE="/var/log/update-community-apps-cron.log"
+LOGROTATE_FILE="/etc/logrotate.d/update-community-apps"
 TAGS="community-script|proxmox-helper-scripts"
 
 # ── Colour helpers ───────────────────────────────────────────────────────────
@@ -162,6 +163,133 @@ select_backup_storage() {
     --menu "Select storage for pre-update backups:" 15 60 8 \
     "${STORAGE_ITEMS[@]}" \
     3>&1 1>&2 2>&3
+}
+
+
+# ── Log management ───────────────────────────────────────────────────────────
+write_logrotate_config() {
+  local retention_days="${1:-28}"
+  local cron_rotations="${2:-4}"
+
+  cat >"$LOGROTATE_FILE" <<EOF
+# Timestamped worker logs created by update-community-apps.sh.
+# These files do not receive additional writes after each run finishes, so
+# maxage is the retention mechanism that removes old timestamped logs.
+/var/log/update-community-apps-[0-9]*_[0-9]*.log {
+    weekly
+    maxage ${retention_days}
+    missingok
+    notifempty
+    compress
+    delaycompress
+}
+
+# Stable cron wrapper log that receives stdout/stderr from scheduled runs.
+/var/log/update-community-apps-cron.log {
+    weekly
+    rotate ${cron_rotations}
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+EOF
+}
+
+current_log_retention() {
+  if [ -f "$LOGROTATE_FILE" ]; then
+    awk '/update-community-apps-\[0-9\]/ { in_worker=1; next } in_worker && /^[[:space:]]*maxage[[:space:]]+/ { print $2; exit } /^}/ { in_worker=0 }' "$LOGROTATE_FILE"
+  fi
+}
+
+change_log_retention() {
+  local current retention
+  current=$(current_log_retention)
+  current=${current:-28}
+
+  retention=$(whiptail --backtitle "Community Apps Update" --title "Log Retention" \
+    --inputbox "Keep timestamped worker logs for how many days?\n\nCurrent: ${current} days" 10 60 "$current" \
+    3>&1 1>&2 2>&3) || return
+
+  if ! [[ "$retention" =~ ^[0-9]+$ ]] || [ "$retention" -lt 1 ]; then
+    whiptail --backtitle "Community Apps Update" --title "Invalid Retention" \
+      --msgbox "Retention must be a positive whole number of days." 8 60
+    return
+  fi
+
+  write_logrotate_config "$retention" 4
+  msg_ok "Log retention set to ${retention} days in ${LOGROTATE_FILE}"
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
+view_logs() {
+  local logs=() log size modified selected
+  while IFS= read -r log; do
+    [ -e "$log" ] || continue
+    size=$(du -h "$log" 2>/dev/null | awk '{print $1}')
+    modified=$(stat -c '%y' "$log" 2>/dev/null | cut -d. -f1)
+    logs+=("$log" "${size:-?}  ${modified:-unknown}")
+  done < <(find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*.log' -o -name 'update-community-apps-cron.log*' \) -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /, ""); print }')
+
+  if [ ${#logs[@]} -eq 0 ]; then
+    whiptail --backtitle "Community Apps Update" --title "Logs" \
+      --msgbox "No update-community-apps logs were found in /var/log." 8 65
+    return
+  fi
+
+  selected=$(whiptail --backtitle "Community Apps Update" --title "Logs" \
+    --menu "Select a log to view:" 20 90 12 \
+    "${logs[@]}" \
+    3>&1 1>&2 2>&3) || return
+
+  whiptail --backtitle "Community Apps Update" --title "$selected" \
+    --textbox "$selected" 30 110
+}
+
+delete_logs() {
+  local count=0
+  count=$(find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*.log' -o -name 'update-community-apps-cron.log*' \) -type f 2>/dev/null | wc -l)
+
+  if [ "$count" -eq 0 ]; then
+    whiptail --backtitle "Community Apps Update" --title "Delete Logs" \
+      --msgbox "No update-community-apps logs were found in /var/log." 8 65
+    return
+  fi
+
+  if ! whiptail --backtitle "Community Apps Update" --title "Delete Logs" \
+    --yesno "Delete ${count} update-community-apps log file(s) from /var/log?\n\nThis includes timestamped worker logs and cron logs/rotations." 10 70; then
+    return
+  fi
+
+  find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*.log' -o -name 'update-community-apps-cron.log*' \) -type f -delete 2>/dev/null || true
+  msg_ok "Deleted update-community-apps logs."
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
+logs_menu() {
+  while true; do
+    local current choice
+    current=$(current_log_retention)
+    current=${current:-not configured}
+
+    choice=$(whiptail --backtitle "Community Apps Update" --title "Logs" \
+      --menu "Log retention: ${current} day(s)\n\nSelect an option:" 16 70 6 \
+      "Retention" "Change timestamped worker log retention" \
+      "View"      "See all update-community-apps logs" \
+      "Delete"    "Delete current update-community-apps logs" \
+      "Back"      "Return to main menu" \
+      3>&1 1>&2 2>&3) || return
+
+    case "$choice" in
+      "Retention") change_log_retention ;;
+      "View")      view_logs ;;
+      "Delete")    delete_logs ;;
+      "Back")      return ;;
+    esac
+  done
 }
 
 # ── Remove current cron entry ────────────────────────────────────────────────
@@ -512,6 +640,8 @@ install_and_configure() {
   install -m 0755 "$tmp" "$LOCAL_SCRIPT"
   rm -f "$tmp"
   msg_ok "Installed to ${LOCAL_SCRIPT}"
+  write_logrotate_config 28 4
+  msg_ok "Installed logrotate config to ${LOGROTATE_FILE}"
 
   # ── Step 9: Add crontab ──────────────────────────────────────────────────
   remove_cron || true  # remove any existing entry first (ok if none)
@@ -570,6 +700,7 @@ main_menu() {
       "Remove"  "Remove cron schedule & local script" \
       "Status"  "Show installation status & last run" \
       "Run Now" "Run update script now (manual trigger)" \
+      "Logs"    "Manage retention, view logs, delete logs" \
       "View"    "View installed script & cron config" \
       "Exit"    "Exit" \
       3>&1 1>&2 2>&3) || exit 0
@@ -581,6 +712,7 @@ main_menu() {
       "Remove")  remove_all ;;
       "Status")  show_status ;;
       "Run Now") run_now ;;
+      "Logs")    logs_menu ;;
       "View")    view_config ;;
       "Exit")    clear; exit 0 ;;
     esac
