@@ -44,7 +44,7 @@ check_root() {
 
 check_whiptail() {
   if ! command -v whiptail &>/dev/null; then
-    msg_error "whiptail is required. Install it with: apt install whiptail"
+    msg_error "whiptail is required. Install the Debian package with: apt install whiptail"
     exit 1
   fi
 }
@@ -56,7 +56,23 @@ check_deps() {
   done
   if [ ${#missing[@]} -gt 0 ]; then
     msg_error "Missing required commands: ${missing[*]}"
-    msg_info "Install with: apt install jq curl"
+
+    local apt_packages=()
+    local needs_proxmox_tools=0
+    local cmd
+    for cmd in "${missing[@]}"; do
+      case "$cmd" in
+        jq|curl) apt_packages+=("$cmd") ;;
+        pct|vzdump) needs_proxmox_tools=1 ;;
+      esac
+    done
+
+    if [ ${#apt_packages[@]} -gt 0 ]; then
+      msg_info "Install missing Debian packages with: apt install ${apt_packages[*]}"
+    fi
+    if [ "$needs_proxmox_tools" -eq 1 ]; then
+      msg_info "This installer must run on a Proxmox VE host with Proxmox tools (pct, vzdump) available."
+    fi
     exit 1
   fi
 }
