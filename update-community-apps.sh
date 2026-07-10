@@ -6,7 +6,6 @@
 #
 # Environment variables:
 #   NOTIFY=yes|no    Enable/disable Discord notification (default: yes)
-#   NOTIFIER_URL     Override notifier endpoint (default: http://192.168.0.11:6068/api/notify)
 
 set -euo pipefail
 
@@ -14,7 +13,7 @@ CONTAINERS="${1:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
 BACKUP_STORAGE="${2:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
 DRY_RUN=no
 NOTIFY="${NOTIFY:-yes}"
-NOTIFIER_URL="${NOTIFIER_URL:-http://192.168.0.11:6068/api/notify}"
+NOTIFIER_URL="http://192.168.0.11:6068/api/notify"
 
 [ "${3:-}" = "dry-run" ] && DRY_RUN=yes
 
