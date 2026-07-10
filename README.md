@@ -61,6 +61,7 @@ This launches an interactive whiptail menu that:
 ## Recommendations
 
 - **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends its summary through the default Proxmox notification pipeline instead of posting to a custom webhook URL.
+- **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
 - **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch Proxmox notification issues even when notifications are enabled.
 
 ## Files
@@ -68,12 +69,14 @@ This launches an interactive whiptail menu that:
 | Path | Purpose |
 |------|---------|
 | `/usr/local/bin/update-community-apps.sh` | The worker script (installed by `install.sh`) |
-| `/var/log/update-community-apps-*.log` | Per-run full output logs |
-| `/var/log/update-community-apps-cron.log` | Cron output log |
+| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run full worker output logs |
+| `/var/log/update-community-apps-cron.log` | Stable cron stdout/stderr log |
 
 ### Log Rotation
 
-Each run creates a timestamped log file. To prevent unbounded accumulation, install the included logrotate config:
+Each run creates a timestamped worker log file. Timestamped logs accumulate because every run uses a unique path, so the included logrotate config uses a `maxage 28` cleanup policy to delete worker logs older than 28 days. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log` and keeps 4 weekly rotations.
+
+To prevent unbounded accumulation, install the included logrotate config:
 
 ```bash
 cp logrotate.conf /etc/logrotate.d/update-community-apps
@@ -86,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update
   -o /etc/logrotate.d/update-community-apps
 ```
 
-This keeps 4 weekly rotations with compression.
+This removes timestamped worker logs older than 28 days, and keeps 4 weekly rotations of the stable cron log, with compression enabled for both.
 
 ## Installer Menu Options
 
