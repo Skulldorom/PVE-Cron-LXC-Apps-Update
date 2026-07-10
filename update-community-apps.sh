@@ -40,8 +40,18 @@ env_args=(
 [ "$DRY_RUN" = "yes" ] && env_args+=(var_dry_run=yes)
 
 set +e
-env "${env_args[@]}" bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh)" 2>&1 | tee "$LOG_FILE"
-EXIT_CODE=${PIPESTATUS[0]}
+tmp="$(mktemp)"
+if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh; then
+  echo "[ERROR] Failed to download upstream update script"
+  echo "[ERROR] Failed to download upstream update script" >&2
+  echo "[ERROR] Failed to download upstream update script" >> "$LOG_FILE"
+  EXIT_CODE=1
+  rm -f "$tmp"
+else
+  env "${env_args[@]}" bash "$tmp" 2>&1 | tee "$LOG_FILE"
+  EXIT_CODE=${PIPESTATUS[0]}
+  rm -f "$tmp"
+fi
 set -e
 
 # Extract summary table (everything between first and last ━━ separator)
