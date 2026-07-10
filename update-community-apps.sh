@@ -100,7 +100,19 @@ if [ "$NOTIFY" = "yes" ]; then
 
   # Send via Proxmox VE's default notification pipeline. This respects the
   # node/datacenter notification targets and matchers instead of posting to a
-  # custom webhook URL.
+  # custom webhook URL. The custom "simple" template is installed on demand
+  # because PVE::Notify requires a renderable subject/body template for each
+  # notification name before any target (including webhook targets) can receive
+  # the message.
+  TEMPLATE_DIR="/etc/pve/notification-templates/default"
+  if mkdir -p "$TEMPLATE_DIR" 2>/dev/null; then
+    [ -f "$TEMPLATE_DIR/simple-subject.txt.hbs" ] || printf '%s\n' '{{ title }}' > "$TEMPLATE_DIR/simple-subject.txt.hbs"
+    [ -f "$TEMPLATE_DIR/simple-body.txt.hbs" ] || printf '%s\n' '{{ message }}' > "$TEMPLATE_DIR/simple-body.txt.hbs"
+    [ -f "$TEMPLATE_DIR/simple-body.html.hbs" ] || printf '%s\n' '<pre>{{ message }}</pre>' > "$TEMPLATE_DIR/simple-body.html.hbs"
+  else
+    echo "[WARN]  Could not create Proxmox notification template directory: $TEMPLATE_DIR" >&2
+  fi
+
   if ! TITLE="$TITLE" MESSAGE="$MESSAGE" SEVERITY="$SEVERITY" perl -MPVE::Notify -e '
     my $common = PVE::Notify::common_template_data();
     my $data = {
