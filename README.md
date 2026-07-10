@@ -2,7 +2,7 @@
 
 > **Disclaimer:** This project is NOT affiliated with, endorsed by, or connected to [community-scripts](https://community-scripts.org) / Proxmox VE Helper Scripts. It is an independent wrapper that automates their `update-apps.sh` tool.
 
-Automates weekly updates of community-scripts-managed LXC containers on a Proxmox VE node. Runs the official `update-apps.sh` with all env vars preset, strips the per-container verbose logging, and optionally sends the final summary table to the companion notifier endpoint.
+Automates weekly updates of community-scripts-managed LXC containers on a Proxmox VE node. Runs the official `update-apps.sh` with all env vars preset, strips the per-container verbose logging, and optionally sends the final summary table through Proxmox VE's default notification pipeline.
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ This launches an interactive whiptail menu that:
   - `var_continue_on_error=yes` — continue to next CT if one fails
   - `var_auto_reboot=yes` — reboot CT if app requires it
 - Captures the summary table (strips verbose per-container logs)
-- Optionally POSTs the summary to the default companion notifier endpoint (see [Recommendations](#recommendations))
+- Optionally sends the summary through Proxmox VE's default notification pipeline
 - Full output logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log`
 
 ## Manual Usage
@@ -48,7 +48,7 @@ This launches an interactive whiptail menu that:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NOTIFY` | `yes` | Set to `no` to skip webhook notification |
+| `NOTIFY` | `yes` | Set to `no` to skip Proxmox notification delivery |
 
 ## Requirements
 
@@ -60,8 +60,8 @@ This launches an interactive whiptail menu that:
 
 ## Recommendations
 
-- **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab at the default internal endpoint (`http://192.168.0.11:6068/api/notify`) so the updater can deliver notifications to its `/api/notify` route.
-- **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch misconfigured webhooks even when notifications are enabled.
+- **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends its summary through the default Proxmox notification pipeline instead of posting to a custom webhook URL.
+- **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch Proxmox notification issues even when notifications are enabled.
 
 ## Files
 

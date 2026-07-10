@@ -5,7 +5,7 @@
 #   /usr/local/bin/update-community-apps.sh <container_ids> <backup_storage> [dry-run]
 #
 # Environment variables:
-#   NOTIFY=yes|no    Enable/disable Discord notification (default: yes)
+#   NOTIFY=yes|no    Enable/disable Proxmox notification (default: yes)
 
 set -euo pipefail
 
@@ -13,7 +13,6 @@ CONTAINERS="${1:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
 BACKUP_STORAGE="${2:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
 DRY_RUN=no
 NOTIFY="${NOTIFY:-yes}"
-NOTIFIER_URL="http://192.168.0.11:6068/api/notify"
 
 [ "${3:-}" = "dry-run" ] && DRY_RUN=yes
 
@@ -82,20 +81,22 @@ if [ "$NOTIFY" = "yes" ]; then
   [ -n "$EXIT_INFO" ] && MESSAGE="$MESSAGE"$'\n\n'"$EXIT_INFO"
 
   SEVERITY="info"
-  [ $EXIT_CODE -eq 0 ] && SEVERITY="notice"
-  [ $EXIT_CODE -gt 0 ] && SEVERITY="error"
+  [ "$EXIT_CODE" -gt 0 ] && SEVERITY="error"
 
-  # Post to notifier — log HTTP status on failure so silent drops are visible
-  HTTP_CODE=$(jq -n \
-    --arg title "$TITLE" \
-    --arg msg "$MESSAGE" \
-    --arg severity "$SEVERITY" \
-    '{title: $title, message: $msg, severity: $severity}' \
-    | curl -s -o /dev/null -w '%{http_code}' \
-      -X POST -H "Content-Type: application/json" -d @- "$NOTIFIER_URL" 2>/dev/null) || true
-
-  if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "202" ]; then
-    echo "[WARN]  Notifier returned HTTP ${HTTP_CODE:-000} — notification may not have been delivered" >&2
+  # Send via Proxmox VE's default notification pipeline. This respects the
+  # node/datacenter notification targets and matchers instead of posting to a
+  # custom webhook URL.
+  if ! TITLE="$TITLE" MESSAGE="$MESSAGE" SEVERITY="$SEVERITY" perl -MPVE::Notify -e '
+    my $common = PVE::Notify::common_template_data();
+    my $data = {
+      %$common,
+      title => $ENV{TITLE} // "",
+      message => $ENV{MESSAGE} // "",
+    };
+    my $fields = { origin => "update-community-apps" };
+    PVE::Notify::notify($ENV{SEVERITY} // "info", "simple", $data, $fields);
+  '; then
+    echo "[WARN]  Proxmox notification delivery failed" >&2
   fi
 fi
 
