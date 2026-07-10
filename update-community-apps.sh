@@ -67,7 +67,7 @@ fi
 EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FILE" || true)
 
 # Always print summary to stdout (for cron mail / log capture)
-echo "===== Community Apps Update — $NODE_NAME ====="
+echo "===== Community Apps Update — $NODE_NAME — $TIMESTAMP ====="
 echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
 [ "$DRY_RUN" = "yes" ] && echo "Mode: DRY-RUN"
 echo ""
@@ -76,7 +76,7 @@ echo ""
 
 # Notification (if enabled)
 if [ "$NOTIFY" = "yes" ]; then
-  TITLE="Community Apps Update — $NODE_NAME"
+  TITLE="Community Apps Update — $NODE_NAME — $TIMESTAMP"
   [ "$DRY_RUN" = "yes" ] && TITLE="[DRY-RUN] $TITLE"
 
   MESSAGE="$TABLE"
