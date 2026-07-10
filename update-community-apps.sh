@@ -103,9 +103,19 @@ if [ "$NOTIFY" = "yes" ]; then
   TITLE="Community Apps Update - $NODE_NAME - $TIMESTAMP"
   [ "$DRY_RUN" = "yes" ] && TITLE="[DRY-RUN] $TITLE"
 
-  MESSAGE="$TABLE"
-  [ -n "$EXIT_INFO" ] && MESSAGE="$MESSAGE"$'\n\n'"$EXIT_INFO"
-  MESSAGE=$(printf '%s' "$MESSAGE" | ascii_for_notification)
+  NOTIFICATION_BODY=$(mktemp)
+  {
+    echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
+    echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
+    [ "$DRY_RUN" = "yes" ] && echo "Mode: DRY-RUN"
+    echo ""
+    echo "===== Summary ====="
+    [ -n "$TABLE" ] && echo "$TABLE"
+    [ -n "$EXIT_INFO" ] && echo "$EXIT_INFO"
+    echo ""
+    echo "===== Full Log ====="
+    cat "$LOG_FILE"
+  } | ascii_for_notification > "$NOTIFICATION_BODY"
 
   SEVERITY="info"
   [ "$EXIT_CODE" -gt 0 ] && SEVERITY="error"
@@ -125,18 +135,25 @@ if [ "$NOTIFY" = "yes" ]; then
     echo "[WARN]  Could not create Proxmox notification template directory: $TEMPLATE_DIR" >&2
   fi
 
-  if ! TITLE="$TITLE" MESSAGE="$MESSAGE" SEVERITY="$SEVERITY" perl -MPVE::Notify -e '
+  if ! TITLE="$TITLE" MESSAGE_FILE="$NOTIFICATION_BODY" SEVERITY="$SEVERITY" perl -MPVE::Notify -e '
+    my $message = "";
+    if (defined $ENV{MESSAGE_FILE} && open(my $fh, "<", $ENV{MESSAGE_FILE})) {
+      local $/;
+      $message = <$fh> // "";
+      close($fh);
+    }
     my $common = PVE::Notify::common_template_data();
     my $data = {
       %$common,
       title => $ENV{TITLE} // "",
-      message => $ENV{MESSAGE} // "",
+      message => $message,
     };
     my $fields = { origin => "update-community-apps" };
     PVE::Notify::notify($ENV{SEVERITY} // "info", "simple", $data, $fields);
   '; then
     echo "[WARN]  Proxmox notification delivery failed" >&2
   fi
+  rm -f "$NOTIFICATION_BODY"
 fi
 
 exit $EXIT_CODE
