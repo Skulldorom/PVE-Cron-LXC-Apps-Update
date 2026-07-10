@@ -79,8 +79,19 @@ fi
 
 EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FILE" || true)
 
+# Proxmox webhook notification templates can be rendered or consumed by targets
+# that do not preserve UTF-8 correctly. Keep notification title/body ASCII-only
+# so em dashes and box-drawing table borders do not arrive as mojibake.
+ascii_for_notification() {
+  LC_ALL=C.UTF-8 perl -CSDA -0pe '
+    s/\x{2014}|\x{2013}/-/g;
+    s/[\x{2500}-\x{257F}]/-/g;
+    s/[^\x09\x0A\x0D\x20-\x7E]/?/g;
+  '
+}
+
 # Always print summary to stdout (for cron mail / log capture)
-echo "===== Community Apps Update — $NODE_NAME — $TIMESTAMP ====="
+echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
 echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
 [ "$DRY_RUN" = "yes" ] && echo "Mode: DRY-RUN"
 echo ""
@@ -89,11 +100,12 @@ echo ""
 
 # Notification (if enabled)
 if [ "$NOTIFY" = "yes" ]; then
-  TITLE="Community Apps Update — $NODE_NAME — $TIMESTAMP"
+  TITLE="Community Apps Update - $NODE_NAME - $TIMESTAMP"
   [ "$DRY_RUN" = "yes" ] && TITLE="[DRY-RUN] $TITLE"
 
   MESSAGE="$TABLE"
   [ -n "$EXIT_INFO" ] && MESSAGE="$MESSAGE"$'\n\n'"$EXIT_INFO"
+  MESSAGE=$(printf '%s' "$MESSAGE" | ascii_for_notification)
 
   SEVERITY="info"
   [ "$EXIT_CODE" -gt 0 ] && SEVERITY="error"
