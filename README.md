@@ -25,7 +25,7 @@ This launches an interactive whiptail menu that:
   - `var_continue_on_error=yes` — continue to next CT if one fails
   - `var_auto_reboot=yes` — reboot CT if app requires it
 - Captures the summary table for quick review
-- Optionally sends the summary followed by the full run log through Proxmox VE's default notification pipeline
+- Optionally sends the summary followed by the run log with the ending summary removed through Proxmox VE's default notification pipeline
 - Full output logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log`
 
 ## Manual Usage
@@ -60,7 +60,7 @@ This launches an interactive whiptail menu that:
 
 ## Recommendations
 
-- **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by the full run log, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
+- **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by the run log with the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
 - **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch Proxmox notification issues even when notifications are enabled.
 
@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update
   -o /etc/logrotate.d/update-community-apps
 ```
 
-This removes timestamped worker logs older than 28 days, and keeps 4 weekly rotations of the stable cron log, with compression enabled for both.
+This removes timestamped worker logs older than 28 days, and keeps 4 weekly rotations of the stable cron log, with compression enabled for both. The installer also includes a **Logs** menu where you can change the timestamped worker log retention period, browse all current updater logs, or delete current updater logs.
 
 ## Installer Menu Options
 
@@ -101,6 +101,7 @@ This removes timestamped worker logs older than 28 days, and keeps 4 weekly rota
 | **Remove** | Remove cron schedule and local script |
 | **Status** | Show installed state, cron entry, and last run |
 | **Run Now** | Manual trigger — runs script immediately |
+| **Logs** | Manage log retention, view update logs, and delete current update logs |
 | **View** | Display installed script content and cron config |
 
 ## License

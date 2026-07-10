@@ -79,6 +79,23 @@ fi
 
 EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FILE" || true)
 
+# Build a copy of the run log without the ending summary table. The summary is
+# already included at the top of the notification, so excluding the final table
+# keeps notification payloads concise while preserving the actionable run output.
+LOG_WITHOUT_SUMMARY=$(awk '
+  /━━━━/{
+    if(!first) first=NR
+    last=NR
+  }
+  {lines[NR]=$0}
+  END{
+    for(i=1;i<=NR;i++){
+      if(first && last && i>=first && i<=last) continue
+      print lines[i]
+    }
+  }
+' "$LOG_FILE")
+
 # Proxmox webhook notification templates can be rendered or consumed by targets
 # that do not preserve UTF-8 correctly. Keep notification title/body ASCII-only
 # so em dashes and box-drawing table borders do not arrive as mojibake.
@@ -113,8 +130,12 @@ if [ "$NOTIFY" = "yes" ]; then
     [ -n "$TABLE" ] && echo "$TABLE"
     [ -n "$EXIT_INFO" ] && echo "$EXIT_INFO"
     echo ""
-    echo "===== Full Log ====="
-    cat "$LOG_FILE"
+    echo "===== Log Output (summary removed) ====="
+    if [ -n "$LOG_WITHOUT_SUMMARY" ]; then
+      echo "$LOG_WITHOUT_SUMMARY"
+    else
+      cat "$LOG_FILE"
+    fi
   } | ascii_for_notification > "$NOTIFICATION_BODY"
 
   SEVERITY="info"
