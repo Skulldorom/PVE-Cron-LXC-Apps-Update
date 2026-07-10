@@ -22,22 +22,25 @@ NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 LOG_FILE="/var/log/update-community-apps-$(date '+%Y%m%d_%H%M%S').log"
 
-UPDATE_CMD="var_container=\"$CONTAINERS\" \
-  var_backup=yes \
-  var_backup_storage=\"$BACKUP_STORAGE\" \
-  var_unattended=yes \
-  var_skip_confirm=yes \
-  var_continue_on_error=yes \
-  var_auto_reboot=yes"
+if [[ ! "$CONTAINERS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "[ERROR] Container IDs must be a comma-separated list of numeric IDs: $CONTAINERS" >&2
+  exit 2
+fi
 
-[ "$DRY_RUN" = "yes" ] && UPDATE_CMD="$UPDATE_CMD \
-  var_dry_run=yes"
+env_args=(
+  var_container="$CONTAINERS"
+  var_backup=yes
+  var_backup_storage="$BACKUP_STORAGE"
+  var_unattended=yes
+  var_skip_confirm=yes
+  var_continue_on_error=yes
+  var_auto_reboot=yes
+)
 
-UPDATE_CMD="$UPDATE_CMD \
-  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh)\""
+[ "$DRY_RUN" = "yes" ] && env_args+=(var_dry_run=yes)
 
 set +e
-eval "$UPDATE_CMD" 2>&1 | tee "$LOG_FILE"
+env "${env_args[@]}" bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh)" 2>&1 | tee "$LOG_FILE"
 EXIT_CODE=${PIPESTATUS[0]}
 set -e
 
