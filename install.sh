@@ -51,7 +51,7 @@ check_whiptail() {
 
 check_deps() {
   local missing=()
-  for cmd in jq curl pct vzdump; do
+  for cmd in curl pct vzdump; do
     command -v "$cmd" &>/dev/null || missing+=("$cmd")
   done
   if [ ${#missing[@]} -gt 0 ]; then
@@ -62,7 +62,7 @@ check_deps() {
     local cmd
     for cmd in "${missing[@]}"; do
       case "$cmd" in
-        jq|curl) apt_packages+=("$cmd") ;;
+        curl) apt_packages+=("$cmd") ;;
         pct|vzdump) needs_proxmox_tools=1 ;;
       esac
     done
@@ -79,17 +79,17 @@ check_deps() {
 
 # ── Discover containers with community-script tags ───────────────────────────
 discover_containers() {
-  local containers cid cname cstatus formatted
-  containers=$(pct list --output-format json | jq -c '.[]')
+  local containers container cid cname cstatus formatted
+  containers=$(pct list | tail -n +2 | awk '{print $0 " " $4}')
   if [ -z "$containers" ]; then
     return 1
   fi
 
   MENU_ITEMS=()
   while read -r container; do
-    cid=$(echo "$container" | jq -r '.vmid')
-    cname=$(echo "$container" | jq -r '.name')
-    cstatus=$(echo "$container" | jq -r '.status')
+    cid=$(echo "$container" | awk '{print $1}')
+    cname=$(echo "$container" | awk '{print $2}')
+    cstatus=$(echo "$container" | awk '{print $3}')
     formatted=$(printf "%-20s %-10s" "$cname" "$cstatus")
     if pct config "$cid" 2>/dev/null | grep -qE "[^-][; ](${TAGS}).*"; then
       MENU_ITEMS+=("$cid" "$formatted" "OFF")
@@ -100,19 +100,11 @@ discover_containers() {
 # ── Discover backup-capable storages ─────────────────────────────────────────
 discover_storages() {
   STORAGE_ITEMS=()
-  local storages node_name
-  node_name="$(hostname -s)"
-  storages=$(awk -v node="$node_name" '
+  local storages
+  storages=$(awk '
     /^[a-z]+:/ {
       if (name != "") {
-        # Node check: if nodes is set, current node must be in the list.
-        # If nodes is empty (no restriction), the storage is available to all.
-        local_ok = 1
-        if (nodes != "") {
-          local_ok = 0
-          if (nodes ~ "(^|,)" node "(,|$)") local_ok = 1
-        }
-        if (local_ok && (has_backup || (!has_content && type == "dir"))) print name
+        if (has_backup || (!has_content && type == "dir")) print name
       }
       split($0, a, ":")
       type = a[1]
@@ -120,25 +112,14 @@ discover_storages() {
       gsub(/^[ \t]+|[ \t]+$/, "", name)
       has_content = 0
       has_backup = 0
-      nodes = ""
     }
     /^[ \t]*content/ {
       has_content = 1
       if ($0 ~ /backup/) has_backup = 1
     }
-    /^[ \t]*nodes/ {
-      # Capture comma-separated node list (e.g. "nodes pve1,pve2")
-      sub(/^[ \t]*nodes[ \t]+/, "")
-      nodes = $0
-    }
     END {
       if (name != "") {
-        local_ok = 1
-        if (nodes != "") {
-          local_ok = 0
-          if (nodes ~ "(^|,)" node "(,|$)") local_ok = 1
-        }
-        if (local_ok && (has_backup || (!has_content && type == "dir"))) print name
+        if (has_backup || (!has_content && type == "dir")) print name
       }
     }
   ' /etc/pve/storage.cfg)

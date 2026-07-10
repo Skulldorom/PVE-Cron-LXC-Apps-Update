@@ -12,7 +12,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-
 
 This launches an interactive whiptail menu that:
 1. Scans your Proxmox node for community-script LXC containers
-2. Detects backup-capable storage targets available to this node
+2. Detects backup-capable storage targets using the upstream `update-apps.sh` selection logic
 3. Walks you through schedule, notifications, and dry-run options
 4. Installs `update-community-apps.sh` and configures the crontab
 
@@ -53,10 +53,10 @@ This launches an interactive whiptail menu that:
 ## Requirements
 
 - Proxmox VE node with `pct` and `vzdump` available
-- `jq`, `curl`, and `whiptail` installed on the host
+- `curl` and `whiptail` installed on the host
 - Community-scripts-managed LXC containers (tagged `community-script` or `proxmox-helper-scripts`)
 - Storage target(s) configured in Proxmox with `backup` content type enabled
-- The installer automatically filters storages by node — only targets available to the current node are shown
+- The installer lists storage targets using the same backup-capable storage detection as the upstream `update-apps.sh` tool
 
 ## Recommendations
 
