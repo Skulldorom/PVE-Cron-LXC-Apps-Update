@@ -26,7 +26,7 @@ This launches an interactive whiptail menu that:
   - `var_auto_reboot=yes` — reboot CT if app requires it
 - Captures the summary table (strips verbose per-container logs)
 - Optionally POSTs the summary to a configurable JSON webhook endpoint (see [Recommendations](#recommendations))
-- Full output logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log`
+- Full worker output logged to a timestamped `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` file for each run
 
 ## Manual Usage
 
@@ -62,19 +62,21 @@ This launches an interactive whiptail menu that:
 ## Recommendations
 
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
-- **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch misconfigured webhooks even when notifications are enabled.
+- **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Timestamped worker logs accumulate over time and are retained by the configured cleanup policy in `logrotate.conf`. Notification delivery failures are logged as `[WARN]` lines so you can catch misconfigured webhooks even when notifications are enabled.
 
 ## Files
 
 | Path | Purpose |
 |------|---------|
 | `/usr/local/bin/update-community-apps.sh` | The worker script (installed by `install.sh`) |
-| `/var/log/update-community-apps-*.log` | Per-run full output logs |
-| `/var/log/update-community-apps-cron.log` | Cron output log |
+| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run full worker output logs |
+| `/var/log/update-community-apps-cron.log` | Stable cron stdout/stderr log |
 
 ### Log Rotation
 
-Each run creates a timestamped log file. To prevent unbounded accumulation, install the included logrotate config:
+Each run creates a timestamped worker log file. Timestamped logs accumulate because every run uses a unique path, so the included logrotate config uses a `maxage 28` cleanup policy to delete worker logs older than 28 days. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log` and keeps 4 weekly rotations.
+
+To prevent unbounded accumulation, install the included logrotate config:
 
 ```bash
 cp logrotate.conf /etc/logrotate.d/update-community-apps
@@ -87,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update
   -o /etc/logrotate.d/update-community-apps
 ```
 
-This keeps 4 weekly rotations with compression.
+This removes timestamped worker logs older than 28 days, and keeps 4 weekly rotations of the stable cron log, with compression enabled for both.
 
 ## Installer Menu Options
 
