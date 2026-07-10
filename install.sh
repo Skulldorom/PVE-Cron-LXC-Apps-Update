@@ -463,10 +463,8 @@ install_and_configure() {
   if whiptail --backtitle "Community Apps Update" --title "Mode" \
     --yesno --defaultno "Enable dry-run mode?\n\nChecks for updates without applying them.\n(Recommended: 'No' for normal operation)" 10 65; then
     DRY_RUN="yes"
-    DRY_RUN_ARG="dry-run"
   else
     DRY_RUN="no"
-    DRY_RUN_ARG=""
   fi
 
   # ── Step 7: Review & Confirm ─────────────────────────────────────────────
