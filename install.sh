@@ -100,33 +100,68 @@ discover_containers() {
 # ── Discover backup-capable storages ─────────────────────────────────────────
 discover_storages() {
   STORAGE_ITEMS=()
-  local storages
-  storages=$(awk '
-    /^[a-z]+:/ {
-      if (name != "") {
-        if (has_backup || (!has_content && type == "dir")) print name
+  local node_name storages
+  node_name=$(hostname -s)
+
+  storages=$(awk -v node="$node_name" '
+    function trim(value) {
+      gsub(/^[ \t]+|[ \t]+$/, "", value)
+      return value
+    }
+    function node_allowed(nodes, item_count, node_items, i) {
+      nodes = trim(nodes)
+      if (nodes == "") return 1
+      item_count = split(nodes, node_items, /[,[:space:]]+/)
+      for (i = 1; i <= item_count; i++) {
+        if (node_items[i] == node) return 1
       }
+      return 0
+    }
+    function print_if_allowed() {
+      if (name == "") return
+      if ((has_backup || (!has_content && type == "dir")) && node_allowed(nodes)) print name
+    }
+    /^[a-z]+:/ {
+      print_if_allowed()
       split($0, a, ":")
       type = a[1]
-      name = a[2]
-      gsub(/^[ \t]+|[ \t]+$/, "", name)
+      name = trim(a[2])
       has_content = 0
       has_backup = 0
+      nodes = ""
     }
-    /^[ \t]*content/ {
+    /^[ \t]*content[ \t]/ {
       has_content = 1
-      if ($0 ~ /backup/) has_backup = 1
+      if ($0 ~ /(^|[ ,])backup([, ]|$)/) has_backup = 1
+    }
+    /^[ \t]*nodes[ \t]/ {
+      sub(/^[ \t]*nodes[ \t]+/, "", $0)
+      nodes = $0
     }
     END {
-      if (name != "") {
-        if (has_backup || (!has_content && type == "dir")) print name
-      }
+      print_if_allowed()
     }
   ' /etc/pve/storage.cfg)
 
   while read -r storage; do
     [ -n "$storage" ] && STORAGE_ITEMS+=("$storage" "")
   done <<<"$storages"
+}
+
+select_backup_storage() {
+  local title="${1:-Backup Storage}"
+  discover_storages
+
+  if [ ${#STORAGE_ITEMS[@]} -eq 0 ]; then
+    whiptail --backtitle "Community Apps Update" --title "No Storage Found" \
+      --msgbox "No backup-capable storage accessible from node '$(hostname -s)' was found in /etc/pve/storage.cfg.\n\nMake sure a storage has backup content enabled and either no nodes restriction or includes this node." 12 70
+    return 1
+  fi
+
+  whiptail --backtitle "Community Apps Update" --title "$title" \
+    --menu "Select storage for pre-update backups:" 15 60 8 \
+    "${STORAGE_ITEMS[@]}" \
+    3>&1 1>&2 2>&3
 }
 
 # ── Remove current cron entry ────────────────────────────────────────────────
@@ -227,9 +262,7 @@ run_now() {
     ct_ids=$(whiptail --backtitle "Community Apps Update" --title "Run Now" \
       --inputbox "Enter container IDs (comma-separated):" 10 50 "101,102" \
       3>&1 1>&2 2>&3) || return
-    storage=$(whiptail --backtitle "Community Apps Update" --title "Run Now" \
-      --inputbox "Enter backup storage:" 10 50 "local" \
-      3>&1 1>&2 2>&3) || return
+    storage=$(select_backup_storage "Run Now") || return
   fi
 
   clear
@@ -258,9 +291,7 @@ dry_run() {
     ct_ids=$(whiptail --backtitle "Community Apps Update" --title "Dry Run" \
       --inputbox "Enter container IDs (comma-separated):" 10 50 "101,102" \
       3>&1 1>&2 2>&3) || return
-    storage=$(whiptail --backtitle "Community Apps Update" --title "Dry Run" \
-      --inputbox "Enter backup storage:" 10 50 "local" \
-      3>&1 1>&2 2>&3) || return
+    storage=$(select_backup_storage "Dry Run") || return
   fi
 
   clear
@@ -365,21 +396,10 @@ install_and_configure() {
     msg_info "No containers selected. Aborting."
     return
   fi
-  CONTAINER_IDS=$(echo "$CHOICE" | tr '\n' ',' | sed 's/,$//')
+  CONTAINER_IDS=$(echo "$CHOICE" | tr '[:space:]' ',' | sed -E 's/,+/,/g; s/^,//; s/,$//')
 
   # ── Step 2: Discover storage ─────────────────────────────────────────────
-  discover_storages
-
-  if [ ${#STORAGE_ITEMS[@]} -eq 0 ]; then
-    whiptail --backtitle "Community Apps Update" --title "No Storage Found" \
-      --msgbox "No backup-capable storage found in /etc/pve/storage.cfg.\n\nMake sure you have a storage configured with 'backup' content type." 10 65
-    return
-  fi
-
-  BACKUP_STORAGE=$(whiptail --backtitle "Community Apps Update" --title "Backup Storage" \
-    --menu "Select storage for pre-update backups:" 15 60 8 \
-    "${STORAGE_ITEMS[@]}" \
-    3>&1 1>&2 2>&3)
+  BACKUP_STORAGE=$(select_backup_storage "Backup Storage")
 
   if [ -z "$BACKUP_STORAGE" ]; then
     msg_info "No storage selected. Aborting."

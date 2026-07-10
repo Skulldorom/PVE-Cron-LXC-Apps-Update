@@ -20,6 +20,11 @@ NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 LOG_FILE="/var/log/update-community-apps-$(date '+%Y%m%d_%H%M%S').log"
 
+# Accept IDs separated by commas and/or whitespace. Whiptail checklists return
+# multiple selections as a space-separated list, while cron entries are stored as
+# comma-separated lists. Normalize both forms before passing them upstream.
+CONTAINERS=$(echo "$CONTAINERS" | tr '[:space:]' ',' | sed -E 's/,+/,/g; s/^,//; s/,$//')
+
 if [[ ! "$CONTAINERS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
   echo "[ERROR] Container IDs must be a comma-separated list of numeric IDs: $CONTAINERS" >&2
   exit 2
