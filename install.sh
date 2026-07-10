@@ -64,16 +64,16 @@ check_deps() {
 # ── Discover containers with community-script tags ───────────────────────────
 discover_containers() {
   local containers cid cname cstatus formatted
-  containers=$(pct list | tail -n +2)
+  containers=$(pct list --output-format json | jq -c '.[]')
   if [ -z "$containers" ]; then
     return 1
   fi
 
   MENU_ITEMS=()
   while read -r container; do
-    cid=$(echo "$container" | awk '{print $1}')
-    cname=$(echo "$container" | awk '{print $NF}')
-    cstatus=$(echo "$container" | awk '{print $3}')
+    cid=$(echo "$container" | jq -r '.vmid')
+    cname=$(echo "$container" | jq -r '.name')
+    cstatus=$(echo "$container" | jq -r '.status')
     formatted=$(printf "%-20s %-10s" "$cname" "$cstatus")
     if pct config "$cid" 2>/dev/null | grep -qE "[^-][; ](${TAGS}).*"; then
       MENU_ITEMS+=("$cid" "$formatted" "OFF")
