@@ -107,6 +107,41 @@ ascii_for_notification() {
   '
 }
 
+# Convert the raw upstream TTY-style log into notification-friendly text. The
+# upstream script redraws status lines and clears the terminal while scanning,
+# which is useful interactively but produces noisy escape sequences and repeated
+# banners in notifications. Keep the actionable progress lines and final log path.
+sanitize_log_for_notification() {
+  LC_ALL=C.UTF-8 perl -CSDA -0pe '
+    s/\e\][^\a]*(?:\a|\e\\)//g;
+    s/\e[PX^_].*?\e\\//gs;
+    s/\e\[[0-?]*[ -\/]*[@-~]//g;
+    s/\e[()][0-2A-Z]//g;
+    s/\r/\n/g;
+    s/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]//g;
+  ' | awk '
+    function flush_blank() {
+      if (started && pending_blank) { print ""; pending_blank=0 }
+    }
+    /^ *(__|\/ \/|\/_____)/ { next }
+    /\/____/ { next }
+    /^ *\/_\/ *$/ { next }
+    /Loading all possible LXC containers from Proxmox VE/ { next }
+    /^Loaded [0-9]+ containers$/ { next }
+    /^$/ {
+      if (started) pending_blank=1
+      next
+    }
+    {
+      if (last_selected && /^\[INFO\]/) pending_blank=1
+      flush_blank()
+      print
+      last_selected = /^Selected containers:/
+      started=1
+    }
+  '
+}
+
 # Always print summary to stdout (for cron mail / log capture)
 echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
 echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
@@ -130,12 +165,13 @@ if [ "$NOTIFY" = "yes" ]; then
     [ -n "$TABLE" ] && echo "$TABLE"
     [ -n "$EXIT_INFO" ] && echo "$EXIT_INFO"
     echo ""
-    echo "===== Log Output (summary removed) ====="
+    echo "===== Log Output ====="
+    echo ""
     if [ -n "$LOG_WITHOUT_SUMMARY" ]; then
       echo "$LOG_WITHOUT_SUMMARY"
     else
       cat "$LOG_FILE"
-    fi
+    fi | sanitize_log_for_notification
   } | ascii_for_notification > "$NOTIFICATION_BODY"
 
   SEVERITY="info"

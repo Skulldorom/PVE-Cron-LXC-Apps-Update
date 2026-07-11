@@ -25,7 +25,7 @@ This launches an interactive whiptail menu that:
   - `var_continue_on_error=yes` — continue to next CT if one fails
   - `var_auto_reboot=yes` — reboot CT if app requires it
 - Captures the summary table for quick review
-- Optionally sends the summary followed by the run log with the ending summary removed through Proxmox VE's default notification pipeline
+- Optionally sends the summary followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed through Proxmox VE's default notification pipeline
 - Full output logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log`
 
 ## Manual Usage
@@ -60,7 +60,7 @@ This launches an interactive whiptail menu that:
 
 ## Recommendations
 
-- **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by the run log with the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
+- **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
 - **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch Proxmox notification issues even when notifications are enabled.
 
