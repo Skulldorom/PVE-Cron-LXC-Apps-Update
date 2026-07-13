@@ -301,6 +301,33 @@ remove_cron() {
   return 1
 }
 
+# ── Human-readable cron description ───────────────────────────────────────────
+cron_to_human() {
+  # Parse cron fields (min hour day month dow) into a human-readable description.
+  # Supports daily, weekly, and monthly schedules.
+  local min hour day month dow dow_label
+  min="$1" hour="$2" day="$3" month="$4" dow="$5"
+
+  if [ "$day" = "*" ] && [ "$month" = "*" ] && [ "$dow" = "*" ]; then
+    # Daily
+    printf 'Daily at %02d:%02d' "$hour" "$min"
+  elif [ "$day" = "*" ] && [ "$month" = "*" ] && [ "$dow" != "*" ]; then
+    # Weekly
+    case "$dow" in
+      0) dow_label="Sunday" ;; 1) dow_label="Monday" ;;   2) dow_label="Tuesday" ;;
+      3) dow_label="Wednesday" ;; 4) dow_label="Thursday" ;; 5) dow_label="Friday" ;;
+      6) dow_label="Saturday" ;; *) dow_label="day $dow" ;;
+    esac
+    printf 'Weekly: %s at %02d:%02d' "$dow_label" "$hour" "$min"
+  elif [ "$day" != "*" ] && [ "$month" = "*" ] && [ "$dow" = "*" ]; then
+    # Monthly
+    printf 'Monthly: day %s at %02d:%02d' "$day" "$hour" "$min"
+  else
+    # Generic
+    printf '%s %s %s %s %s' "$min" "$hour" "$day" "$month" "$dow"
+  fi
+}
+
 # ── Status ───────────────────────────────────────────────────────────────────
 show_status() {
   echo ""
@@ -316,21 +343,41 @@ show_status() {
   fi
 
   if crontab -l -u root 2>/dev/null | grep -q "${LOCAL_SCRIPT}"; then
-    local entry schedule
-    entry=$(crontab -l -u root 2>/dev/null | grep "${LOCAL_SCRIPT}")
-    schedule=$(echo "$entry" | awk '{print $1,$2,$3,$4,$5}')
-    msg_ok "Cron active: ${schedule}"
+    local entry cron_fields schedule_desc
+    entry=$(crontab -l -u root 2>/dev/null | grep "${LOCAL_SCRIPT}" | head -1)
+    cron_fields=$(echo "$entry" | awk '{print $1,$2,$3,$4,$5}')
+    schedule_desc=$(cron_to_human $cron_fields 2>/dev/null || echo "$cron_fields")
+    msg_ok "Cron active: ${schedule_desc}"
     echo -e "      Full entry: ${entry}"
   else
     msg_error "Cron not configured"
   fi
 
+  # ── Last run status (I3 integration) ─────────────────────────────────────
+  local status_file="/var/log/update-community-apps-last-status"
+  if [ -f "$status_file" ]; then
+    local exit_code timestamp containers errors
+    exit_code=$(grep '^exit_code=' "$status_file" 2>/dev/null | cut -d= -f2)
+    timestamp=$(grep '^timestamp=' "$status_file" 2>/dev/null | cut -d= -f2-)
+    containers=$(grep '^containers=' "$status_file" 2>/dev/null | cut -d= -f2)
+    errors=$(grep '^errors_count=' "$status_file" 2>/dev/null | cut -d= -f2)
+
+    if [ -n "$exit_code" ]; then
+      if [ "$exit_code" = "0" ]; then
+        echo -e "  ${GREEN}Last run: ✅ SUCCESS${NC}"
+      else
+        echo -e "  ${RED}Last run: ❌ FAILED (exit ${exit_code})${NC}"
+      fi
+      [ -n "$timestamp" ] && echo -e "      When: ${timestamp}"
+      [ -n "$containers" ] && echo -e "      Containers: ${containers}"
+      [ -n "${errors:-}" ] && [ "$errors" -gt 0 ] && echo -e "      ${YELLOW}Errors: ${errors} container(s)${NC}"
+    fi
+  fi
+
   if [ -f "$LOG_FILE" ]; then
-    local log_size last_run
+    local log_size
     log_size=$(du -h "$LOG_FILE" | awk '{print $1}')
-    last_run=$(grep 'Community Apps Update' "$LOG_FILE" 2>/dev/null | tail -1 | sed 's/===== //' | sed 's/ =====//')
     echo -e "  ${BLUE}[Info]${NC}  Log: ${LOG_FILE} (${log_size})"
-    [ -n "${last_run:-}" ] && echo -e "      Last run: ${last_run}"
   else
     echo -e "  ${BLUE}[Info]${NC}  Log: (no runs yet)"
   fi
@@ -534,58 +581,174 @@ install_and_configure() {
     return
   fi
 
-  # ── Step 3: Schedule — Day of week ───────────────────────────────────────
-  DOW=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Day" \
-    --menu "Select day of week:" 15 50 8 \
-    "0" "Sunday" \
-    "1" "Monday" \
-    "2" "Tuesday" \
-    "3" "Wednesday" \
-    "4" "Thursday" \
-    "5" "Friday" \
-    "6" "Saturday" \
-    "*" "Daily" \
+    # ── Step 3: Schedule — Frequency ─────────────────────────────────────────
+  FREQ=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Frequency" \
+    --menu "How often should updates run?" 14 50 3 \
+    "daily"   "Every day" \
+    "weekly"  "Once a week" \
+    "monthly" "Once a month" \
     3>&1 1>&2 2>&3)
 
-  [ -z "$DOW" ] && { msg_info "Aborted."; return; }
+  [ -z "$FREQ" ] && { msg_info "Aborted."; return; }
 
-  # ── Step 4: Schedule — Hour ──────────────────────────────────────────────
-  HOUR=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Hour" \
-    --menu "Select hour (24h format):" 15 50 8 \
-    "0"  "00:00 (midnight)" \
-    "1"  "01:00" \
-    "2"  "02:00" \
-    "3"  "03:00" \
-    "4"  "04:00" \
-    "5"  "05:00" \
-    "6"  "06:00" \
-    "7"  "07:00" \
-    "8"  "08:00" \
-    "9"  "09:00" \
-    "10" "10:00" \
-    "11" "11:00" \
-    "12" "12:00 (noon)" \
-    "13" "13:00" \
-    "14" "14:00" \
-    "15" "15:00" \
-    "16" "16:00" \
-    "17" "17:00" \
-    "18" "18:00" \
-    "19" "19:00" \
-    "20" "20:00" \
-    "21" "21:00" \
-    "22" "22:00" \
-    "23" "23:00" \
-    3>&1 1>&2 2>&3)
+  HOUR=""
+  DOW=""
+  DAY=""
 
-  [ -z "$HOUR" ] && { msg_info "Aborted."; return; }
+  case "$FREQ" in
+    daily)
+      HOUR=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Daily Hour" \
+        --menu "Select hour for daily updates (24h format):" 15 50 8 \
+        "0"  "00:00 (midnight)" \
+        "1"  "01:00" \
+        "2"  "02:00" \
+        "3"  "03:00" \
+        "4"  "04:00" \
+        "5"  "05:00" \
+        "6"  "06:00" \
+        "7"  "07:00" \
+        "8"  "08:00" \
+        "9"  "09:00" \
+        "10" "10:00" \
+        "11" "11:00" \
+        "12" "12:00 (noon)" \
+        "13" "13:00" \
+        "14" "14:00" \
+        "15" "15:00" \
+        "16" "16:00" \
+        "17" "17:00" \
+        "18" "18:00" \
+        "19" "19:00" \
+        "20" "20:00" \
+        "21" "21:00" \
+        "22" "22:00" \
+        "23" "23:00" \
+        3>&1 1>&2 2>&3)
+      [ -z "$HOUR" ] && { msg_info "Aborted."; return; }
+      ;;
 
-  # ── Step 5: Notifications ────────────────────────────────────────────────
+    weekly)
+      DOW=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Day of Week" \
+        --menu "Select day of week:" 15 50 8 \
+        "0" "Sunday" \
+        "1" "Monday" \
+        "2" "Tuesday" \
+        "3" "Wednesday" \
+        "4" "Thursday" \
+        "5" "Friday" \
+        "6" "Saturday" \
+        3>&1 1>&2 2>&3)
+      [ -z "$DOW" ] && { msg_info "Aborted."; return; }
+
+      HOUR=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Hour" \
+        --menu "Select hour for weekly updates (24h format):" 15 50 8 \
+        "0"  "00:00 (midnight)" \
+        "1"  "01:00" \
+        "2"  "02:00" \
+        "3"  "03:00" \
+        "4"  "04:00" \
+        "5"  "05:00" \
+        "6"  "06:00" \
+        "7"  "07:00" \
+        "8"  "08:00" \
+        "9"  "09:00" \
+        "10" "10:00" \
+        "11" "11:00" \
+        "12" "12:00 (noon)" \
+        "13" "13:00" \
+        "14" "14:00" \
+        "15" "15:00" \
+        "16" "16:00" \
+        "17" "17:00" \
+        "18" "18:00" \
+        "19" "19:00" \
+        "20" "20:00" \
+        "21" "21:00" \
+        "22" "22:00" \
+        "23" "23:00" \
+        3>&1 1>&2 2>&3)
+      [ -z "$HOUR" ] && { msg_info "Aborted."; return; }
+      ;;
+
+    monthly)
+      DAY=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Day of Month" \
+        --menu "Select day of month:" 15 50 8 \
+        "1"  "1st" \
+        "2"  "2nd" \
+        "3"  "3rd" \
+        "4"  "4th" \
+        "5"  "5th" \
+        "6"  "6th" \
+        "7"  "7th" \
+        "8"  "8th" \
+        "9"  "9th" \
+        "10" "10th" \
+        "11" "11th" \
+        "12" "12th" \
+        "13" "13th" \
+        "14" "14th" \
+        "15" "15th" \
+        "16" "16th" \
+        "17" "17th" \
+        "18" "18th" \
+        "19" "19th" \
+        "20" "20th" \
+        "21" "21st" \
+        "22" "22nd" \
+        "23" "23rd" \
+        "24" "24th" \
+        "25" "25th" \
+        "26" "26th" \
+        "27" "27th" \
+        "28" "28th" \
+        3>&1 1>&2 2>&3)
+      [ -z "$DAY" ] && { msg_info "Aborted."; return; }
+
+      HOUR=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Hour" \
+        --menu "Select hour for monthly updates (24h format):" 15 50 8 \
+        "0"  "00:00 (midnight)" \
+        "1"  "01:00" \
+        "2"  "02:00" \
+        "3"  "03:00" \
+        "4"  "04:00" \
+        "5"  "05:00" \
+        "6"  "06:00" \
+        "7"  "07:00" \
+        "8"  "08:00" \
+        "9"  "09:00" \
+        "10" "10:00" \
+        "11" "11:00" \
+        "12" "12:00 (noon)" \
+        "13" "13:00" \
+        "14" "14:00" \
+        "15" "15:00" \
+        "16" "16:00" \
+        "17" "17:00" \
+        "18" "18:00" \
+        "19" "19:00" \
+        "20" "20:00" \
+        "21" "21:00" \
+        "22" "22:00" \
+        "23" "23:00" \
+        3>&1 1>&2 2>&3)
+      [ -z "$HOUR" ] && { msg_info "Aborted."; return; }
+      ;;
+  esac
+
+# ── Step 5: Notifications ────────────────────────────────────────────────
   if whiptail --backtitle "Community Apps Update" --title "Notifications" \
     --yesno "Enable notifications?\n\nSends the summary table to your configured\nnotification endpoint on completion." 10 60; then
     NOTIFY="yes"
   else
     NOTIFY="no"
+  fi
+
+  # ── Step 5b: Backups ──────────────────────────────────────────────────────
+  if whiptail --backtitle "Community Apps Update" --title "Backups" \
+    --yesno "Enable pre-update backups?\n\nTakes a vzdump snapshot of each container\nbefore applying updates.\n(Recommended: 'Yes' for safety)" 11 60; then
+    BACKUP="yes"
+  else
+    BACKUP="no"
   fi
 
   # ── Step 6: Dry-run mode ─────────────────────────────────────────────────
@@ -597,32 +760,37 @@ install_and_configure() {
   fi
 
   # ── Step 7: Review & Confirm ─────────────────────────────────────────────
-  local dow_label
-  case "$DOW" in
-    0) dow_label="Sunday" ;;  1) dow_label="Monday" ;;   2) dow_label="Tuesday" ;;
-    3) dow_label="Wednesday" ;; 4) dow_label="Thursday" ;; 5) dow_label="Friday" ;;
-    6) dow_label="Saturday" ;; *) dow_label="Every day" ;;
-  esac
-
   local schedule_desc
-  if [ "$DOW" = "*" ]; then
-    schedule_desc="Daily at $(printf '%02d' "$HOUR"):00"
-    DOW="*"
-  else
-    schedule_desc="Every ${dow_label} at $(printf '%02d' "$HOUR"):00"
-  fi
+  case "$FREQ" in
+    daily)
+      schedule_desc="Daily at $(printf '%02d' "$HOUR"):00"
+      ;;
+    weekly)
+      local dow_label
+      case "$DOW" in
+        0) dow_label="Sunday" ;; 1) dow_label="Monday" ;;   2) dow_label="Tuesday" ;;
+        3) dow_label="Wednesday" ;; 4) dow_label="Thursday" ;; 5) dow_label="Friday" ;;
+        6) dow_label="Saturday" ;;
+      esac
+      schedule_desc="Weekly: ${dow_label} at $(printf '%02d' "$HOUR"):00"
+      ;;
+    monthly)
+      schedule_desc="Monthly: day ${DAY} at $(printf '%02d' "$HOUR"):00"
+      ;;
+  esac
 
   whiptail --backtitle "Community Apps Update" --title "Review Configuration" \
     --yesno "Please review your configuration:\n\n\
   Containers:     ${CONTAINER_IDS}\n\
   Backup Storage:  ${BACKUP_STORAGE}\n\
+  Backups:         ${BACKUP}\n\
   Schedule:        ${schedule_desc}\n\
   Notifications:   ${NOTIFY}\n\
   Dry-run:         ${DRY_RUN}\n\
 \n\
   Install to:      ${LOCAL_SCRIPT}\n\
   Log file:        ${LOG_FILE}\n\
-\nProceed with installation?" 18 65 || {
+\nProceed with installation?" 19 65 || {
     msg_info "Installation cancelled."
     return
   }
@@ -647,13 +815,19 @@ install_and_configure() {
   remove_cron || true  # remove any existing entry first (ok if none)
 
   local cron_entry cron_env
-  cron_env="NOTIFY=${NOTIFY}"
+  cron_env="NOTIFY=${NOTIFY} BACKUP=${BACKUP}"
   cron_entry="${cron_env} ${LOCAL_SCRIPT} \"${CONTAINER_IDS}\" \"${BACKUP_STORAGE}\""
 
   [ "$DRY_RUN" = "yes" ] && cron_entry="${cron_entry} dry-run"
 
   cron_entry="${cron_entry} >>${LOG_FILE} 2>&1"
-  cron_entry="0 ${HOUR} * * ${DOW} ${cron_entry}"
+  # Map frequency to cron fields
+  case "$FREQ" in
+    daily)   CRON_MIN="0" CRON_HOUR="$HOUR" CRON_DAY="*" CRON_MONTH="*" CRON_DOW="*" ;;
+    weekly)  CRON_MIN="0" CRON_HOUR="$HOUR" CRON_DAY="*" CRON_MONTH="*" CRON_DOW="$DOW" ;;
+    monthly) CRON_MIN="0" CRON_HOUR="$HOUR" CRON_DAY="$DAY" CRON_MONTH="*" CRON_DOW="*" ;;
+  esac
+  cron_entry="${CRON_MIN} ${CRON_HOUR} ${CRON_DAY} ${CRON_MONTH} ${CRON_DOW} ${cron_entry}"
 
   (crontab -l -u root 2>/dev/null || true; echo "$cron_entry") | crontab -u root -
   msg_ok "Cron schedule added: ${schedule_desc}"
@@ -667,6 +841,7 @@ install_and_configure() {
   echo -e "  ${BLUE}Log:${NC}     ${LOG_FILE}"
   echo -e "  ${BLUE}Cron:${NC}    ${schedule_desc}"
   echo -e "  ${BLUE}Notify:${NC}  ${NOTIFY}"
+  echo -e "  ${BLUE}Backups:${NC} ${BACKUP}"
   [ "$DRY_RUN" = "yes" ] && echo -e "  ${YELLOW}Mode:    DRY-RUN (no updates applied)${NC}"
   echo ""
   echo -e "  Run manually: ${LOCAL_SCRIPT} \"${CONTAINER_IDS}\" \"${BACKUP_STORAGE}\""
