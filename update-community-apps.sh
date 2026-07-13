@@ -6,19 +6,27 @@
 #
 # Environment variables:
 #   NOTIFY=yes|no    Enable/disable Proxmox notification (default: yes)
+#   BACKUP=yes|no    Enable/disable pre-update vzdump backups (default: yes)
 
-set -euo pipefail
+# No 'set -e' — we handle exit codes explicitly so downstream processing
+# (summary parsing, notification, status file) always runs even when the
+# upstream script fails on individual containers.
+set -uo pipefail
 
 CONTAINERS="${1:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
 BACKUP_STORAGE="${2:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
 DRY_RUN=no
 NOTIFY="${NOTIFY:-yes}"
+BACKUP="${BACKUP:-yes}"
 
 [ "${3:-}" = "dry-run" ] && DRY_RUN=yes
 
 NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
-LOG_FILE="/var/log/update-community-apps-$(date '+%Y%m%d_%H%M%S').log"
+TIMESTAMP_FILE="$(date '+%Y%m%d_%H%M%S')"
+LOG_FILE="/var/log/update-community-apps-${TIMESTAMP_FILE}.log"
+LOG_FILE_CLEAN="/var/log/update-community-apps-${TIMESTAMP_FILE}-clean.log"
+STATUS_FILE="/var/log/update-community-apps-last-status"
 
 # Accept IDs separated by commas and/or whitespace. Whiptail checklists return
 # multiple selections as a space-separated list, while cron entries are stored as
@@ -32,7 +40,7 @@ fi
 
 env_args=(
   var_container="$CONTAINERS"
-  var_backup=yes
+  var_backup="$BACKUP"
   var_backup_storage="$BACKUP_STORAGE"
   var_unattended=yes
   var_skip_confirm=yes
@@ -42,22 +50,47 @@ env_args=(
 
 [ "$DRY_RUN" = "yes" ] && env_args+=(var_dry_run=yes)
 
-set +e
+# ── Run upstream update script ────────────────────────────────────────────────
+# Capture the exit code explicitly rather than relying on set -e, so downstream
+# processing always runs (summary parsing, notification, status file) even when
+# the upstream script fails on individual containers.
+EXIT_CODE=0
 tmp="$(mktemp)"
 if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh; then
-  echo "[ERROR] Failed to download upstream update script"
-  echo "[ERROR] Failed to download upstream update script" >&2
-  echo "[ERROR] Failed to download upstream update script" >> "$LOG_FILE"
+  echo "[ERROR] Failed to download upstream update script" | tee -a "$LOG_FILE" >&2
   EXIT_CODE=1
   rm -f "$tmp"
 else
-  env "${env_args[@]}" bash "$tmp" 2>&1 | tee "$LOG_FILE"
+  env "${env_args[@]}" bash "$tmp" 2>&1 | tee "$LOG_FILE" || true
   EXIT_CODE=${PIPESTATUS[0]}
   rm -f "$tmp"
 fi
-set -e
 
-# Extract summary table (everything between first and last ━━ separator)
+# ── Produce a clean readable log (I2 fix) ─────────────────────────────────────
+# The upstream script writes terminal escape codes, ANSI sequences, redraws,
+# and banners to stdout. The raw log is preserved for debugging, but we also
+# produce a clean version that is safe to cat / view / grep.
+sanitize_log_for_file() {
+  LC_ALL=C.UTF-8 perl -CSDA -0pe '
+    s/\e\][^\a]*(?:\a|\e\\)//g;
+    s/\e[PX^_].*?\e\\//gs;
+    s/\e\[[0-?]*[ -\/]*[@-~]//g;
+    s/\e[()][0-2A-Z]//g;
+    s/\r\n/\n/g;
+    s/\r/\n/g;
+    s/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]//g;
+  '
+}
+
+if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+  sanitize_log_for_file < "$LOG_FILE" > "$LOG_FILE_CLEAN" 2>/dev/null || true
+fi
+
+# ── Extract summary table (I1 fix: guarded) ───────────────────────────────────
+# Use the clean log for extraction to avoid escape-sequence interference.
+LOG_FOR_PARSE="${LOG_FILE_CLEAN}"
+[ -s "$LOG_FOR_PARSE" ] || LOG_FOR_PARSE="$LOG_FILE"
+
 TABLE=$(awk '
   /━━━━/{
     if(!first) first=NR
@@ -69,15 +102,15 @@ TABLE=$(awk '
       for(i=first;i<=last;i++) print lines[i]
     }
   }
-' "$LOG_FILE")
+' "$LOG_FOR_PARSE" 2>/dev/null || true)
 
 # Fallback: if separator parsing fails (e.g. upstream format change),
 # send the last 40 lines so you always get something useful
 if [ -z "$TABLE" ]; then
-  TABLE=$(tail -40 "$LOG_FILE")
+  TABLE=$(tail -40 "$LOG_FOR_PARSE" 2>/dev/null || true)
 fi
 
-EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FILE" || true)
+EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FOR_PARSE" 2>/dev/null || true)
 
 # Build a copy of the run log without the ending summary table. The summary is
 # already included at the top of the notification, so excluding the final table
@@ -94,7 +127,28 @@ LOG_WITHOUT_SUMMARY=$(awk '
       print lines[i]
     }
   }
-' "$LOG_FILE")
+' "$LOG_FOR_PARSE" 2>/dev/null || true)
+
+# ── Write last-run status file (I3 fix) ───────────────────────────────────────
+# Provides a machine-readable status that the installer's Status menu reads.
+# Also useful for monitoring scripts and debugging.
+CONTAINER_COUNT=$(echo "$CONTAINERS" | tr ',' '\n' | wc -l)
+ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || echo 0)
+
+{
+  echo "exit_code=${EXIT_CODE}"
+  echo "timestamp=${TIMESTAMP}"
+  echo "node=${NODE_NAME}"
+  echo "containers=${CONTAINERS}"
+  echo "container_count=${CONTAINER_COUNT}"
+  echo "backup_storage=${BACKUP_STORAGE}"
+  echo "backup_enabled=${BACKUP}"
+  echo "dry_run=${DRY_RUN}"
+  echo "notify=${NOTIFY}"
+  echo "errors_count=${ERROR_COUNT}"
+  echo "log_file=${LOG_FILE}"
+  echo "log_file_clean=${LOG_FILE_CLEAN}"
+} > "$STATUS_FILE" 2>/dev/null || true
 
 # Proxmox webhook notification templates can be rendered or consumed by targets
 # that do not preserve UTF-8 correctly. Keep notification title/body ASCII-only
@@ -144,11 +198,14 @@ sanitize_log_for_notification() {
 
 # Always print summary to stdout (for cron mail / log capture)
 echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
-echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
+echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE | Backup enabled: $BACKUP"
 [ "$DRY_RUN" = "yes" ] && echo "Mode: DRY-RUN"
 echo ""
 [ -n "$TABLE" ] && echo "$TABLE"
 [ -n "$EXIT_INFO" ] && echo "$EXIT_INFO"
+echo ""
+echo "Log: $LOG_FILE"
+echo "Clean log: $LOG_FILE_CLEAN"
 
 # Notification (if enabled)
 if [ "$NOTIFY" = "yes" ]; then
@@ -170,9 +227,9 @@ if [ "$NOTIFY" = "yes" ]; then
     if [ -n "$LOG_WITHOUT_SUMMARY" ]; then
       echo "$LOG_WITHOUT_SUMMARY"
     else
-      cat "$LOG_FILE"
+      cat "$LOG_FILE" 2>/dev/null || true
     fi | sanitize_log_for_notification
-  } | ascii_for_notification > "$NOTIFICATION_BODY"
+  } | ascii_for_notification > "$NOTIFICATION_BODY" 2>/dev/null || true
 
   SEVERITY="info"
   [ "$EXIT_CODE" -gt 0 ] && SEVERITY="error"
@@ -207,7 +264,7 @@ if [ "$NOTIFY" = "yes" ]; then
     };
     my $fields = { origin => "update-community-apps" };
     PVE::Notify::notify($ENV{SEVERITY} // "info", "simple", $data, $fields);
-  '; then
+  ' 2>/dev/null; then
     echo "[WARN]  Proxmox notification delivery failed" >&2
   fi
   rm -f "$NOTIFICATION_BODY"
