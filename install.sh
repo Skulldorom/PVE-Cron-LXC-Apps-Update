@@ -344,9 +344,16 @@ else
   exit 1
 fi
 
+args=("\$CONTAINER_IDS")
+if [ "\${BACKUP:-yes}" = "yes" ]; then
+  args+=("\$BACKUP_STORAGE")
+fi
+if [ "\${DRY_RUN:-no}" = "yes" ]; then
+  args+=(dry-run)
+fi
+
 NOTIFY="\${NOTIFY:-yes}" BACKUP="\${BACKUP:-yes}" \
-  "\$WORKER_SCRIPT" "\$CONTAINER_IDS" "\$BACKUP_STORAGE" \
-  \${DRY_RUN:+\$DRY_RUN}
+  "\$WORKER_SCRIPT" "\${args[@]}"
 
 exit \$?
 WREOF
