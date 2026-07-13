@@ -13,17 +13,20 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-
 This launches an interactive whiptail menu that:
 1. Scans your Proxmox node for community-script LXC containers
 2. Detects backup-capable storage targets using the upstream `update-apps.sh` selection logic
-3. Walks you through schedule, notifications, and dry-run options
-4. Installs `update-community-apps.sh` and configures the crontab
+3. Walks you through frequency (daily/weekly/monthly), hour, notifications, backups, and dry-run options
+4. Installs `update-community-apps.sh`, a cron wrapper script, and configures the crontab
 
 ## What It Does
 
 - Runs [community-scripts `update-apps.sh`](https://community-scripts.org/docs/tools/pve/update-apps) unattended with:
-  - `var_backup=yes` — snapshot with `vzdump` before updating
+  - `var_backup=yes|no` — snapshot with `vzdump` before updating (toggleable)
   - `var_unattended=yes` — no interactive prompts inside containers
   - `var_skip_confirm=yes` — skip initial confirmation
   - `var_continue_on_error=yes` — continue to next CT if one fails
   - `var_auto_reboot=yes` — reboot CT if app requires it
+- **Per-container error resilience** — one container failing does not abort the run; downstream processing (summary, notification, status file) always executes
+- **Clean readable logs** — produces a sanitized `-clean.log` alongside the raw terminal-noise log; the clean log is safe to `cat`, `grep`, and view
+- **Last-run status file** — writes `/var/log/update-community-apps-last-status` with exit code, timestamp, containers, and error count; the installer Status menu reads it for ✅/❌ display
 - Captures the summary table for quick review
 - Optionally sends the summary followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed through Proxmox VE's default notification pipeline
 - Full output logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log`
@@ -49,6 +52,26 @@ This launches an interactive whiptail menu that:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NOTIFY` | `yes` | Set to `no` to skip Proxmox notification delivery |
+| `BACKUP` | `yes` | Set to `no` to skip pre-update vzdump backups |
+
+## Configuration
+
+The installer creates a config file at `/etc/update-community-apps/config` with all settings:
+
+```
+CONTAINER_IDS="101,102,105"
+BACKUP_STORAGE="local"
+BACKUP="yes"
+SCHEDULE="0 5 * * 0"
+NOTIFY="yes"
+DRY_RUN="no"
+```
+
+A thin wrapper script at `/usr/local/bin/update-community-apps-wrapper.sh` sources this config and calls the worker. The crontab entry invokes the wrapper, keeping the cron line compact and editable via the **Edit Config** menu.
+
+### Edit Config
+
+The installer's **Edit Config** menu re-runs the full configuration wizard with your current values pre-filled — no need to reinstall to change containers, storage, schedule, or toggles. It rewrites the config file, wrapper script, and crontab entry atomically.
 
 ## Requirements
 
@@ -62,15 +85,19 @@ This launches an interactive whiptail menu that:
 
 - **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
-- **Log monitoring** — check `/var/log/update-community-apps-*.log` periodically. Notification delivery failures are logged as `[WARN]` lines so you can catch Proxmox notification issues even when notifications are enabled.
+- **Log monitoring** — check `/var/log/update-community-apps-*-clean.log` for readable run output. Raw terminal-noise logs are preserved alongside for debugging. Notification delivery failures are logged as `[WARN]` lines in the clean log.
 
 ## Files
 
 | Path | Purpose |
 |------|---------|
 | `/usr/local/bin/update-community-apps.sh` | The worker script (installed by `install.sh`) |
-| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run full worker output logs |
+| `/usr/local/bin/update-community-apps-wrapper.sh` | Cron wrapper — sources config, calls worker |
+| `/etc/update-community-apps/config` | Configuration file (source-able key=value pairs) |
+| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run raw worker output (terminal noise preserved) |
+| `/var/log/update-community-apps-YYYYMMDD_HHMMSS-clean.log` | Per-run sanitized output (safe to cat/grep/view) |
 | `/var/log/update-community-apps-cron.log` | Stable cron stdout/stderr log |
+| `/var/log/update-community-apps-last-status` | Last-run status (exit code, timestamp, errors) |
 
 ### Log Rotation
 
@@ -96,13 +123,26 @@ This removes timestamped worker logs older than 28 days, and keeps 4 weekly rota
 | Option | Description |
 |--------|-------------|
 | **Install** | Discover containers & storage, configure schedule, install cron |
-| **Dry Run** | Check for updates without applying (reads args from cron or prompts) |
+| **Edit Config** | Edit containers, storage, schedule, backups, notifications, and dry-run without reinstalling |
+| **Dry Run** | Check for updates without applying (reads args from config or prompts) |
 | **Update** | Diff and pull latest `update-community-apps.sh` from GitHub |
-| **Remove** | Remove cron schedule and local script |
-| **Status** | Show installed state, cron entry, and last run |
+| **Remove** | Remove cron schedule, wrapper, config file, and local script |
+| **Status** | Show installed state, human-readable schedule, ✅/❌ last-run outcome |
 | **Run Now** | Manual trigger — runs script immediately |
 | **Logs** | Manage log retention, view update logs, and delete current update logs |
-| **View** | Display installed script content and cron config |
+| **View** | Display installed script, config file, and cron config |
+
+## Schedule Options
+
+The installer supports three schedule frequencies:
+
+| Frequency | Cron Expression | Example Display |
+|-----------|----------------|-----------------|
+| **Daily** | `0 H * * *` | "Daily at 05:00" |
+| **Weekly** | `0 H * * DOW` | "Weekly: Sunday at 05:00" |
+| **Monthly** | `0 H DAY * *` | "Monthly: day 15 at 05:00" |
+
+The Status menu parses the cron entry and displays a human-readable schedule description. The Edit Config menu lets you change the schedule at any time.
 
 ## License
 
