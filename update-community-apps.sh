@@ -183,15 +183,26 @@ sanitize_log_for_notification() {
     s/\e[PX^_].*?\e\\//gs;
     s/\e\[[0-?]*[ -\/]*[@-~]//g;
     s/\e[()][0-2A-Z]//g;
+    s/\r\n/\n/g;
     s/\r/\n/g;
     s/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]//g;
   ' | awk '
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      return value
+    }
+    function normalize(value) {
+      value = trim(value)
+      gsub(/[[:space:]]+/, " ", value)
+      return value
+    }
     function flush_blank() {
       if (started && pending_blank) { print ""; pending_blank=0 }
     }
     /^ *(__|\/ \/|\/_____)/ { next }
     /\/____/ { next }
     /^ *\/_\/ *$/ { next }
+    /^ *[_\/]/ && /(__|___|\\|`)/ { next }
     /Loading all possible LXC containers from Proxmox VE/ { next }
     /^Loaded [0-9]+ containers$/ { next }
     /^$/ {
@@ -199,6 +210,15 @@ sanitize_log_for_notification() {
       next
     }
     {
+      normalized = normalize($0)
+
+      # Upstream helper scripts redraw spinner/progress lines in-place. Once
+      # carriage returns are converted for notifications, those redraws become
+      # hundreds of identical lines. Keep the first copy and drop consecutive
+      # duplicates so the notification stays readable instead of weaponized.
+      if (normalized == last_normalized) next
+      last_normalized = normalized
+
       if (last_selected && /^\[INFO\]/) pending_blank=1
       flush_blank()
       print
