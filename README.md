@@ -12,8 +12,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-
 
 This launches an interactive whiptail menu that:
 1. Scans your Proxmox node for community-script LXC containers
-2. Detects backup-capable storage targets using the upstream `update-apps.sh` selection logic
-3. Walks you through frequency (daily/weekly/monthly), hour, notifications, backups, and dry-run options
+2. Walks you through frequency (daily/weekly/monthly), hour, notifications, backups, and dry-run options
+3. If backups are enabled, detects backup-capable storage targets using the upstream `update-apps.sh` selection logic
 4. Installs `update-community-apps.sh`, a cron wrapper script, and configures the crontab
 
 ## What It Does
@@ -39,12 +39,15 @@ This launches an interactive whiptail menu that:
 
 # Dry-run — check what's available without applying
 /usr/local/bin/update-community-apps.sh "101,102,105,109,111" "HDD-Storage" dry-run
+
+# Run without backups — no storage selection needed
+BACKUP=no /usr/local/bin/update-community-apps.sh "101,102,105,109,111"
 ```
 
 | Arg | Required | Description |
 |-----|----------|-------------|
 | `container_ids` | ✅ | Comma-separated list of CT IDs to update |
-| `backup_storage` | ✅ | Proxmox storage name for pre-update backups |
+| `backup_storage` | Required when `BACKUP=yes` | Proxmox storage name for pre-update backups |
 | `dry-run` | ❌ | Pass `dry-run` as 3rd arg to check only |
 
 ### Environment Variables
@@ -71,7 +74,7 @@ A thin wrapper script at `/usr/local/bin/update-community-apps-wrapper.sh` sourc
 
 ### Edit Config
 
-The installer's **Edit Config** menu re-runs the full configuration wizard with your current values pre-filled — no need to reinstall to change containers, storage, schedule, or toggles. It rewrites the config file, wrapper script, and crontab entry atomically.
+The installer's **Edit Config** menu shows each current value and lets you keep it or change only that setting — no reinstall, no remembering your old LXC IDs, no ritual sacrifice to the cron gods. When backups are enabled, storage is selected immediately after the backup prompt; when backups are disabled, storage is skipped. It rewrites the config file, wrapper script, and crontab entry atomically.
 
 ## Requirements
 
@@ -123,7 +126,7 @@ This removes timestamped worker logs older than 28 days, and keeps 4 weekly rota
 | Option | Description |
 |--------|-------------|
 | **Install** | Discover containers & storage, configure schedule, install cron |
-| **Edit Config** | Edit containers, storage, schedule, backups, notifications, and dry-run without reinstalling |
+| **Edit Config** | Keep current settings or change only containers, backups/storage, schedule, notifications, and dry-run without reinstalling |
 | **Dry Run** | Check for updates without applying (reads args from config or prompts) |
 | **Update** | Diff and pull latest `update-community-apps.sh` from GitHub |
 | **Remove** | Remove cron schedule, wrapper, config file, and local script |
