@@ -1105,11 +1105,11 @@ main_menu() {
     choice=$(whiptail --backtitle "Community Apps Update" --title "Main Menu" \
       --menu "Select an option:" 20 65 10 \
       "Install"    "Install script & configure cron schedule" \
-      "Edit Config" "Edit installed containers, storage, schedule & toggles" \
-      "Dry Run"    "Check for updates without applying (dry-run)" \
       "Update"     "Update local script from GitHub" \
-      "Remove"     "Remove cron schedule & local script" \
       "Status"     "Show installation status & last run" \
+      "Edit"       "Edit containers, schedule & settings" \
+      "Remove"     "Remove cron schedule & local script" \
+      "Dry Run"    "Check for updates without applying (dry-run)" \
       "Run Now"    "Run update script now (manual trigger)" \
       "Logs"       "Manage retention, view logs, delete logs" \
       "View"       "View installed script & cron config" \
@@ -1118,11 +1118,11 @@ main_menu() {
 
     case "$choice" in
       "Install")     install_and_configure ;;
-      "Edit Config") edit_config ;;
-      "Dry Run") dry_run ;;
       "Update")  update_script ;; 
-      "Remove")  remove_all ;;
       "Status")  show_status ;;
+      "Edit") edit_config ;;
+      "Remove")  remove_all ;;
+      "Dry Run") dry_run ;;
       "Run Now") run_now ;;
       "Logs")    logs_menu ;;
       "View")    view_config ;;
