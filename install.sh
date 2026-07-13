@@ -177,7 +177,9 @@ write_logrotate_config() {
 # Timestamped worker logs created by update-community-apps.sh.
 # These files do not receive additional writes after each run finishes, so
 # maxage is the retention mechanism that removes old timestamped logs.
-/var/log/update-community-apps-[0-9]*_[0-9]*.log {
+# Both raw (terminal noise) and clean (sanitized) logs are covered.
+/var/log/update-community-apps-[0-9]*_[0-9]*.log
+/var/log/update-community-apps-[0-9]*_[0-9]*-clean.log {
     weekly
     maxage ${retention_days}
     missingok
