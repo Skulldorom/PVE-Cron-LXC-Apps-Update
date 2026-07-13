@@ -361,113 +361,231 @@ read_config() {
   return 1
 }
 
+
+container_is_selected() {
+  local cid="$1" selected_ids=",${2:-},"
+  [[ "$selected_ids" == *",${cid},"* ]]
+}
+
+apply_container_defaults() {
+  local current_ids="${1:-}" index cid
+  [ -n "$current_ids" ] || return 0
+
+  for ((index=0; index<${#MENU_ITEMS[@]}; index+=3)); do
+    cid="${MENU_ITEMS[$index]}"
+    if container_is_selected "$cid" "$current_ids"; then
+      MENU_ITEMS[$((index + 2))]="ON"
+    fi
+  done
+}
+
+select_containers() {
+  local title="$1" prompt="$2" current_ids="${3:-}" choice
+
+  if ! discover_containers || [ ${#MENU_ITEMS[@]} -eq 0 ]; then
+    whiptail --backtitle "Community Apps Update" --title "No Containers Found" \
+      --msgbox "No LXC containers with community-script tags found.\n\nTags checked: ${TAGS//\|/, }\n\nMake sure your containers are tagged with 'community-script'\nor 'proxmox-helper-scripts' in their Proxmox config." 12 65
+    return 1
+  fi
+
+  apply_container_defaults "$current_ids"
+
+  choice=$(whiptail --backtitle "Community Apps Update" --title "$title" \
+    --checklist "$prompt\n(Use SPACE to select, TAB to switch, ENTER to confirm)" \
+    20 75 12 \
+    "${MENU_ITEMS[@]}" \
+    3>&1 1>&2 2>&3 | tr -d '"') || return 1
+
+  if [ -z "$choice" ]; then
+    msg_info "No containers selected. Aborting."
+    return 1
+  fi
+
+  echo "$choice" | tr '[:space:]' ',' | sed -E 's/,+/,/g; s/^,//; s/,$//'
+}
+
+ask_change_setting() {
+  local title="$1" setting="$2" current="$3" choice
+  choice=$(whiptail --backtitle "Community Apps Update" --title "$title" \
+    --menu "${setting}\n\nCurrent: ${current}\n\nKeep the current value or change it?" 13 72 2 \
+    "keep"   "Keep current value" \
+    "change" "Change this setting" \
+    3>&1 1>&2 2>&3) || return 1
+
+  [ "$choice" = "change" ]
+}
+
+prompt_yes_no_value() {
+  local title="$1" message="$2" current="${3:-yes}"
+
+  if [ "$current" = "yes" ]; then
+    if whiptail --backtitle "Community Apps Update" --title "$title" \
+      --yesno "$message" 10 65; then
+      echo "yes"
+    else
+      echo "no"
+    fi
+  else
+    if whiptail --backtitle "Community Apps Update" --title "$title" \
+      --defaultno --yesno "$message" 10 65; then
+      echo "yes"
+    else
+      echo "no"
+    fi
+  fi
+}
+
+configure_backup_flow() {
+  local title_prefix="$1" current_backup="${2:-yes}" backup storage
+
+  backup=$(prompt_yes_no_value "${title_prefix} — Backups" \
+    "Allow pre-update backups?\n\nIf enabled, the next screen will ask which storage to use for vzdump backups." \
+    "$current_backup") || return 1
+
+  if [ "$backup" = "yes" ]; then
+    storage=$(select_backup_storage "${title_prefix} — Backup Storage") || return 1
+    if [ -z "$storage" ]; then
+      msg_info "No storage selected. Aborting."
+      return 1
+    fi
+  else
+    storage=""
+  fi
+
+  printf '%s\t%s\n' "$backup" "$storage"
+}
+
 edit_config() {
   # Edit the installed configuration without reinstalling.
-  # Reloads current config and walks through each setting with the same
-  # whiptail wizards as the installer, then rewrites config + crontab.
+  # Each setting can be kept as-is or changed, so users only touch the pieces
+  # that actually need changing.
   if [ ! -f "$CONFIG_FILE" ]; then
-    whiptail --backtitle "Community Apps Update" --title "Edit Config"       --msgbox "No config file found.\n\nRun 'Install' first to create one." 8 60
+    whiptail --backtitle "Community Apps Update" --title "Edit Config" \
+      --msgbox "No config file found.\n\nRun 'Install' first to create one." 8 60
     return
   fi
 
   read_config || {
-    whiptail --backtitle "Community Apps Update" --title "Edit Config"       --msgbox "Failed to read config file: ${CONFIG_FILE}" 8 70
+    whiptail --backtitle "Community Apps Update" --title "Edit Config" \
+      --msgbox "Failed to read config file: ${CONFIG_FILE}" 8 70
     return
   }
 
-  local ct_ids="$CONTAINER_IDS"
-  local storage="$BACKUP_STORAGE"
-  local backup="$BACKUP"
+  local ct_ids="${CONTAINER_IDS:-}"
+  local storage="${BACKUP_STORAGE:-}"
+  local backup="${BACKUP:-yes}"
   local notify="${NOTIFY:-yes}"
   local dry="${DRY_RUN:-no}"
 
   # Parse current schedule
   local cur_min cur_hour cur_day cur_month cur_dow
-  read -r cur_min cur_hour cur_day cur_month cur_dow <<< "$SCHEDULE"
+  read -r cur_min cur_hour cur_day cur_month cur_dow <<< "${SCHEDULE:-0 0 * * 0}"
 
-  # ── Wizard: Containers ───────────────────────────────────────────────────
-  msg_info "Scanning for community-script containers..."
-  if discover_containers && [ ${#MENU_ITEMS[@]} -gt 0 ]; then
-    local choice
-    choice=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Containers"       --checklist "Current: ${ct_ids}\n\nSelect LXC containers to update:\n(Use SPACE to select, ENTER to confirm)"       20 75 12       "${MENU_ITEMS[@]}"       3>&1 1>&2 2>&3 | tr -d '"')
-    if [ -n "$choice" ]; then
-      ct_ids=$(echo "$choice" | tr '[:space:]' ',' | sed -E 's/,+/,/g; s/^,//; s/,$//')
-    fi
+  # ── Edit: Containers ──────────────────────────────────────────────────────
+  if ask_change_setting "Edit Config — Containers" "LXC containers to update" "$ct_ids"; then
+    local new_ct_ids
+    msg_info "Scanning for community-script containers..."
+    new_ct_ids=$(select_containers "Edit Config — Containers" \
+      "Current: ${ct_ids}\n\nSelect LXC containers to update:" "$ct_ids") || return
+    ct_ids="$new_ct_ids"
   fi
 
-  # ── Wizard: Storage ──────────────────────────────────────────────────────
-  local new_storage
-  new_storage=$(select_backup_storage "Edit Config — Backup Storage")
-  [ -n "$new_storage" ] && storage="$new_storage"
+  # ── Edit: Backups + Storage ───────────────────────────────────────────────
+  local storage_display="${storage:-not selected}"
+  if ask_change_setting "Edit Config — Backups" "Backups and backup storage" "backups=${backup}, storage=${storage_display}"; then
+    local backup_result
+    backup_result=$(configure_backup_flow "Edit Config" "$backup") || return
+    backup=$(printf '%s' "$backup_result" | cut -f1)
+    storage=$(printf '%s' "$backup_result" | cut -f2-)
+  fi
 
-  # ── Wizard: Schedule ────────────────────────────────────────────────────
-  local new_freq
-  new_freq=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Frequency"     --menu "Current schedule: ${SCHEDULE}\n\nHow often should updates run?" 14 60 3     "daily"   "Every day"     "weekly"  "Once a week"     "monthly" "Once a month"     3>&1 1>&2 2>&3)
+  # ── Edit: Schedule ────────────────────────────────────────────────────────
+  local current_schedule_desc
+  current_schedule_desc=$(cron_to_human "$cur_min" "$cur_hour" "$cur_day" "$cur_month" "$cur_dow" 2>/dev/null || echo "${cur_min} ${cur_hour} ${cur_day} ${cur_month} ${cur_dow}")
 
-  if [ -n "$new_freq" ]; then
-    local new_hour new_dow new_day
+  if ask_change_setting "Edit Config — Schedule" "Cron schedule" "$current_schedule_desc"; then
+    local new_freq new_hour new_dow new_day
+    new_freq=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Frequency" \
+      --menu "Current schedule: ${current_schedule_desc}\n\nHow often should updates run?" 14 60 3 \
+      "daily"   "Every day" \
+      "weekly"  "Once a week" \
+      "monthly" "Once a month" \
+      3>&1 1>&2 2>&3) || return
+
     new_hour=""
     case "$new_freq" in
       daily)
-        new_hour=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Hour"           --menu "Select hour for daily updates:" 15 50 8           "0" "00:00" "1" "01:00" "2" "02:00" "3" "03:00" "4" "04:00"           "5" "05:00" "6" "06:00" "7" "07:00" "8" "08:00" "9" "09:00"           "10" "10:00" "11" "11:00" "12" "12:00" "13" "13:00" "14" "14:00"           "15" "15:00" "16" "16:00" "17" "17:00" "18" "18:00" "19" "19:00"           "20" "20:00" "21" "21:00" "22" "22:00" "23" "23:00"           3>&1 1>&2 2>&3)
-        [ -n "$new_hour" ] && { cur_min=0; cur_hour="$new_hour"; cur_day="*"; cur_month="*"; cur_dow="*"; }
+        new_hour=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Hour" \
+          --menu "Select hour for daily updates:" 15 50 8 \
+          "0" "00:00" "1" "01:00" "2" "02:00" "3" "03:00" "4" "04:00" \
+          "5" "05:00" "6" "06:00" "7" "07:00" "8" "08:00" "9" "09:00" \
+          "10" "10:00" "11" "11:00" "12" "12:00" "13" "13:00" "14" "14:00" \
+          "15" "15:00" "16" "16:00" "17" "17:00" "18" "18:00" "19" "19:00" \
+          "20" "20:00" "21" "21:00" "22" "22:00" "23" "23:00" \
+          3>&1 1>&2 2>&3) || return
+        cur_min=0; cur_hour="$new_hour"; cur_day="*"; cur_month="*"; cur_dow="*"
         ;;
       weekly)
-        new_dow=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Day"           --menu "Select day of week:" 15 50 8           "0" "Sunday" "1" "Monday" "2" "Tuesday" "3" "Wednesday"           "4" "Thursday" "5" "Friday" "6" "Saturday"           3>&1 1>&2 2>&3)
-        if [ -n "$new_dow" ]; then
-          new_hour=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Hour"             --menu "Select hour:" 15 50 8             "0" "00:00" "1" "01:00" "2" "02:00" "3" "03:00" "4" "04:00"             "5" "05:00" "6" "06:00" "7" "07:00" "8" "08:00" "9" "09:00"             "10" "10:00" "11" "11:00" "12" "12:00" "13" "13:00" "14" "14:00"             "15" "15:00" "16" "16:00" "17" "17:00" "18" "18:00" "19" "19:00"             "20" "20:00" "21" "21:00" "22" "22:00" "23" "23:00"             3>&1 1>&2 2>&3)
-          [ -n "$new_hour" ] && { cur_min=0; cur_hour="$new_hour"; cur_day="*"; cur_month="*"; cur_dow="$new_dow"; }
-        fi
+        new_dow=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Day" \
+          --menu "Select day of week:" 15 50 8 \
+          "0" "Sunday" "1" "Monday" "2" "Tuesday" "3" "Wednesday" \
+          "4" "Thursday" "5" "Friday" "6" "Saturday" \
+          3>&1 1>&2 2>&3) || return
+        new_hour=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Hour" \
+          --menu "Select hour:" 15 50 8 \
+          "0" "00:00" "1" "01:00" "2" "02:00" "3" "03:00" "4" "04:00" \
+          "5" "05:00" "6" "06:00" "7" "07:00" "8" "08:00" "9" "09:00" \
+          "10" "10:00" "11" "11:00" "12" "12:00" "13" "13:00" "14" "14:00" \
+          "15" "15:00" "16" "16:00" "17" "17:00" "18" "18:00" "19" "19:00" \
+          "20" "20:00" "21" "21:00" "22" "22:00" "23" "23:00" \
+          3>&1 1>&2 2>&3) || return
+        cur_min=0; cur_hour="$new_hour"; cur_day="*"; cur_month="*"; cur_dow="$new_dow"
         ;;
       monthly)
-        new_day=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Day"           --menu "Select day of month:" 15 50 8           "1" "1st" "2" "2nd" "3" "3rd" "4" "4th" "5" "5th"           "6" "6th" "7" "7th" "8" "8th" "9" "9th" "10" "10th"           "11" "11th" "12" "12th" "13" "13th" "14" "14th" "15" "15th"           "16" "16th" "17" "17th" "18" "18th" "19" "19th" "20" "20th"           "21" "21st" "22" "22nd" "23" "23rd" "24" "24th"           "25" "25th" "26" "26th" "27" "27th" "28" "28th"           3>&1 1>&2 2>&3)
-        if [ -n "$new_day" ]; then
-          new_hour=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Hour"             --menu "Select hour:" 15 50 8             "0" "00:00" "1" "01:00" "2" "02:00" "3" "03:00" "4" "04:00"             "5" "05:00" "6" "06:00" "7" "07:00" "8" "08:00" "9" "09:00"             "10" "10:00" "11" "11:00" "12" "12:00" "13" "13:00" "14" "14:00"             "15" "15:00" "16" "16:00" "17" "17:00" "18" "18:00" "19" "19:00"             "20" "20:00" "21" "21:00" "22" "22:00" "23" "23:00"             3>&1 1>&2 2>&3)
-          [ -n "$new_hour" ] && { cur_min=0; cur_hour="$new_hour"; cur_day="$new_day"; cur_month="*"; cur_dow="*"; }
-        fi
+        new_day=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Day" \
+          --menu "Select day of month:" 15 50 8 \
+          "1" "1st" "2" "2nd" "3" "3rd" "4" "4th" "5" "5th" \
+          "6" "6th" "7" "7th" "8" "8th" "9" "9th" "10" "10th" \
+          "11" "11th" "12" "12th" "13" "13th" "14" "14th" "15" "15th" \
+          "16" "16th" "17" "17th" "18" "18th" "19" "19th" "20" "20th" \
+          "21" "21st" "22" "22nd" "23" "23rd" "24" "24th" \
+          "25" "25th" "26" "26th" "27" "27th" "28" "28th" \
+          3>&1 1>&2 2>&3) || return
+        new_hour=$(whiptail --backtitle "Community Apps Update" --title "Edit Config — Hour" \
+          --menu "Select hour:" 15 50 8 \
+          "0" "00:00" "1" "01:00" "2" "02:00" "3" "03:00" "4" "04:00" \
+          "5" "05:00" "6" "06:00" "7" "07:00" "8" "08:00" "9" "09:00" \
+          "10" "10:00" "11" "11:00" "12" "12:00" "13" "13:00" "14" "14:00" \
+          "15" "15:00" "16" "16:00" "17" "17:00" "18" "18:00" "19" "19:00" \
+          "20" "20:00" "21" "21:00" "22" "22:00" "23" "23:00" \
+          3>&1 1>&2 2>&3) || return
+        cur_min=0; cur_hour="$new_hour"; cur_day="$new_day"; cur_month="*"; cur_dow="*"
         ;;
     esac
   fi
 
-  # ── Wizard: Notifications ────────────────────────────────────────────────
-  local notify_default="--defaultno"
-  [ "$notify" = "yes" ] && notify_default=""
-  if whiptail --backtitle "Community Apps Update" --title "Edit Config — Notifications"     --yesno $notify_default "Enable notifications?" 8 50; then
-    notify="yes"
-  else
-    notify="no"
+  # ── Edit: Notifications ──────────────────────────────────────────────────
+  if ask_change_setting "Edit Config — Notifications" "Notifications" "$notify"; then
+    notify=$(prompt_yes_no_value "Edit Config — Notifications" "Enable notifications?" "$notify") || return
   fi
 
-  # ── Wizard: Backups ──────────────────────────────────────────────────────
-  local backup_default="--defaultno"
-  [ "$backup" = "yes" ] && backup_default=""
-  if whiptail --backtitle "Community Apps Update" --title "Edit Config — Backups"     --yesno $backup_default "Enable pre-update backups?" 8 50; then
-    backup="yes"
-  else
-    backup="no"
-  fi
-
-  # ── Wizard: Dry-run ─────────────────────────────────────────────────────
-  local dry_default="--defaultno"
-  [ "$dry" = "yes" ] && dry_default=""
-  if whiptail --backtitle "Community Apps Update" --title "Edit Config — Mode"     --yesno $dry_default "Enable dry-run mode?
-
-(Checks for updates without applying)" 9 50; then
-    dry="yes"
-  else
-    dry="no"
+  # ── Edit: Dry-run ─────────────────────────────────────────────────────────
+  if ask_change_setting "Edit Config — Mode" "Dry-run mode" "$dry"; then
+    dry=$(prompt_yes_no_value "Edit Config — Mode" "Enable dry-run mode?\n\nChecks for updates without applying them." "$dry") || return
   fi
 
   # ── Review ───────────────────────────────────────────────────────────────
-  local schedule_desc
+  local schedule_desc review_storage
   schedule_desc=$(cron_to_human "$cur_min" "$cur_hour" "$cur_day" "$cur_month" "$cur_dow" 2>/dev/null || echo "${cur_min} ${cur_hour} ${cur_day} ${cur_month} ${cur_dow}")
+  review_storage="${storage:-not used}"
 
-  if ! whiptail --backtitle "Community Apps Update" --title "Edit Config — Review"     --yesno "Review your changes:
+  if ! whiptail --backtitle "Community Apps Update" --title "Edit Config — Review" \
+    --yesno "Review your changes:
 
-  Containers:     ${ct_ids}
-  Backup Storage:  ${storage}
-  Schedule:        ${schedule_desc}
+  Containers:      ${ct_ids}
   Backups:         ${backup}
+  Backup Storage:  ${review_storage}
+  Schedule:        ${schedule_desc}
   Notifications:   ${notify}
   Dry-run:         ${dry}
 
@@ -477,7 +595,8 @@ Apply changes?" 16 65; then
   fi
 
   # ── Write config + wrapper + update crontab ──────────────────────────────
-  write_config "$cur_min" "$cur_hour" "$cur_day" "$cur_month" "$cur_dow"     "$ct_ids" "$storage" "$notify" "$backup" "$dry"
+  write_config "$cur_min" "$cur_hour" "$cur_day" "$cur_month" "$cur_dow" \
+    "$ct_ids" "$storage" "$notify" "$backup" "$dry"
 
   remove_cron || true
   local cron_entry
@@ -779,33 +898,9 @@ update_script() {
 install_and_configure() {
   # ── Step 1: Discover containers ──────────────────────────────────────────
   msg_info "Scanning for community-script containers..."
-  if ! discover_containers || [ ${#MENU_ITEMS[@]} -eq 0 ]; then
-    whiptail --backtitle "Community Apps Update" --title "No Containers Found" \
-      --msgbox "No LXC containers with community-script tags found.\n\nTags checked: ${TAGS//\|/, }\n\nMake sure your containers are tagged with 'community-script'\nor 'proxmox-helper-scripts' in their Proxmox config." 12 65
-    return
-  fi
+  CONTAINER_IDS=$(select_containers "Select Containers" "Select LXC containers to update:" "") || return
 
-  CHOICE=$(whiptail --backtitle "Community Apps Update" --title "Select Containers" \
-    --checklist "Select LXC containers to update:\n(Use SPACE to select, TAB to switch, ENTER to confirm)" \
-    20 75 12 \
-    "${MENU_ITEMS[@]}" \
-    3>&1 1>&2 2>&3 | tr -d '"')
-
-  if [ -z "$CHOICE" ]; then
-    msg_info "No containers selected. Aborting."
-    return
-  fi
-  CONTAINER_IDS=$(echo "$CHOICE" | tr '[:space:]' ',' | sed -E 's/,+/,/g; s/^,//; s/,$//')
-
-  # ── Step 2: Discover storage ─────────────────────────────────────────────
-  BACKUP_STORAGE=$(select_backup_storage "Backup Storage")
-
-  if [ -z "$BACKUP_STORAGE" ]; then
-    msg_info "No storage selected. Aborting."
-    return
-  fi
-
-    # ── Step 3: Schedule — Frequency ─────────────────────────────────────────
+  # ── Step 2: Schedule — Frequency ─────────────────────────────────────────
   FREQ=$(whiptail --backtitle "Community Apps Update" --title "Schedule — Frequency" \
     --menu "How often should updates run?" 14 50 3 \
     "daily"   "Every day" \
@@ -967,13 +1062,11 @@ install_and_configure() {
     NOTIFY="no"
   fi
 
-  # ── Step 5b: Backups ──────────────────────────────────────────────────────
-  if whiptail --backtitle "Community Apps Update" --title "Backups" \
-    --yesno "Enable pre-update backups?\n\nTakes a vzdump snapshot of each container\nbefore applying updates.\n(Recommended: 'Yes' for safety)" 11 60; then
-    BACKUP="yes"
-  else
-    BACKUP="no"
-  fi
+  # ── Step 5b: Backups + Storage ────────────────────────────────────────────
+  local backup_result
+  backup_result=$(configure_backup_flow "Install" "yes") || return
+  BACKUP=$(printf '%s' "$backup_result" | cut -f1)
+  BACKUP_STORAGE=$(printf '%s' "$backup_result" | cut -f2-)
 
   # ── Step 6: Dry-run mode ─────────────────────────────────────────────────
   if whiptail --backtitle "Community Apps Update" --title "Mode" \
@@ -1006,8 +1099,8 @@ install_and_configure() {
   whiptail --backtitle "Community Apps Update" --title "Review Configuration" \
     --yesno "Please review your configuration:\n\n\
   Containers:     ${CONTAINER_IDS}\n\
-  Backup Storage:  ${BACKUP_STORAGE}\n\
   Backups:         ${BACKUP}\n\
+  Backup Storage:  ${BACKUP_STORAGE:-not used}\n\
   Schedule:        ${schedule_desc}\n\
   Notifications:   ${NOTIFY}\n\
   Dry-run:         ${DRY_RUN}\n\
@@ -1079,7 +1172,7 @@ install_and_configure() {
   echo -e "  ${BLUE}Backups:${NC} ${BACKUP}"
   [ "$DRY_RUN" = "yes" ] && echo -e "  ${YELLOW}Mode:    DRY-RUN (no updates applied)${NC}"
   echo ""
-  echo -e "  Run manually: ${LOCAL_SCRIPT} \"${CONTAINER_IDS}\" \"${BACKUP_STORAGE}\""
+  echo -e "  Run manually: BACKUP=\"${BACKUP}\" ${LOCAL_SCRIPT} \"${CONTAINER_IDS}\" \"${BACKUP_STORAGE}\""
   echo ""
   read -rp "Press Enter to continue..."
 }

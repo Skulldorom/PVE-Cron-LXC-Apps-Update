@@ -2,24 +2,36 @@
 # update-community-apps.sh — Unattended community-scripts app update + optional notifier
 #
 # Usage:
-#   /usr/local/bin/update-community-apps.sh <container_ids> <backup_storage> [dry-run]
+#   /usr/local/bin/update-community-apps.sh <container_ids> [backup_storage] [dry-run]
 #
 # Environment variables:
 #   NOTIFY=yes|no    Enable/disable Proxmox notification (default: yes)
 #   BACKUP=yes|no    Enable/disable pre-update vzdump backups (default: yes)
+#
+# backup_storage is required when BACKUP=yes and ignored when BACKUP=no.
 
 # No 'set -e' — we handle exit codes explicitly so downstream processing
 # (summary parsing, notification, status file) always runs even when the
 # upstream script fails on individual containers.
 set -uo pipefail
 
-CONTAINERS="${1:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
-BACKUP_STORAGE="${2:?Usage: $0 <container_ids> <backup_storage> [dry-run]}"
+CONTAINERS="${1:?Usage: $0 <container_ids> [backup_storage] [dry-run]}"
+BACKUP_STORAGE="${2:-}"
 DRY_RUN=no
 NOTIFY="${NOTIFY:-yes}"
 BACKUP="${BACKUP:-yes}"
 
-[ "${3:-}" = "dry-run" ] && DRY_RUN=yes
+if [ "${2:-}" = "dry-run" ]; then
+  DRY_RUN=yes
+  BACKUP_STORAGE=""
+elif [ "${3:-}" = "dry-run" ]; then
+  DRY_RUN=yes
+fi
+
+if [ "$BACKUP" = "yes" ] && [ -z "$BACKUP_STORAGE" ]; then
+  echo "[ERROR] Backup storage is required when BACKUP=yes" >&2
+  exit 2
+fi
 
 NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -41,13 +53,13 @@ fi
 env_args=(
   var_container="$CONTAINERS"
   var_backup="$BACKUP"
-  var_backup_storage="$BACKUP_STORAGE"
   var_unattended=yes
   var_skip_confirm=yes
   var_continue_on_error=yes
   var_auto_reboot=yes
 )
 
+[ "$BACKUP" = "yes" ] && env_args+=(var_backup_storage="$BACKUP_STORAGE")
 [ "$DRY_RUN" = "yes" ] && env_args+=(var_dry_run=yes)
 
 # ── Run upstream update script ────────────────────────────────────────────────
@@ -198,7 +210,11 @@ sanitize_log_for_notification() {
 
 # Always print summary to stdout (for cron mail / log capture)
 echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
-echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE | Backup enabled: $BACKUP"
+if [ "$BACKUP" = "yes" ]; then
+  echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE | Backup enabled: yes"
+else
+  echo "Containers: $CONTAINERS | Backup: disabled"
+fi
 [ "$DRY_RUN" = "yes" ] && echo "Mode: DRY-RUN"
 echo ""
 [ -n "$TABLE" ] && echo "$TABLE"
@@ -215,7 +231,11 @@ if [ "$NOTIFY" = "yes" ]; then
   NOTIFICATION_BODY=$(mktemp)
   {
     echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
-    echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
+    if [ "$BACKUP" = "yes" ]; then
+      echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE"
+    else
+      echo "Containers: $CONTAINERS | Backup: disabled"
+    fi
     [ "$DRY_RUN" = "yes" ] && echo "Mode: DRY-RUN"
     echo ""
     echo "===== Summary ====="
