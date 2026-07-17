@@ -9,6 +9,7 @@ set -euo pipefail
 
 REPO_URL="https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update/main"
 SCRIPT_URL="${REPO_URL}/update-community-apps.sh"
+LOGROTATE_URL="${REPO_URL}/logrotate.conf"
 LOCAL_SCRIPT="/usr/local/bin/update-community-apps.sh"
 LOG_FILE="/var/log/update-community-apps-cron.log"
 LOGROTATE_FILE="/etc/logrotate.d/update-community-apps"
@@ -859,9 +860,11 @@ update_script() {
     return
   fi
 
-  msg_info "Downloading latest version..."
   local tmp
   tmp=$(mktemp)
+
+  # ── Update: Worker script ───────────────────────────────────────────────
+  msg_info "Downloading latest worker script..."
   if ! curl -fsSL -o "$tmp" "$SCRIPT_URL"; then
     msg_error "Failed to download: ${SCRIPT_URL}"
     rm -f "$tmp"
@@ -874,31 +877,85 @@ update_script() {
   old_hash=$(sha256sum "$LOCAL_SCRIPT" | awk '{print $1}')
 
   if [ "$new_hash" = "$old_hash" ]; then
-    msg_ok "Already up-to-date (no changes)."
+    msg_ok "Worker script already up-to-date (no changes)."
     rm -f "$tmp"
-    read -rp "Press Enter to continue..."
-    return
+  else
+    if command -v diff &>/dev/null; then
+      diff --color=always "$LOCAL_SCRIPT" "$tmp" 2>/dev/null || true
+    fi
+
+    echo ""
+    echo -e "  ${BLUE}Current SHA256:${NC} ${old_hash}"
+    echo -e "  ${BLUE}New SHA256:${NC}     ${new_hash}"
+    echo ""
+
+    if whiptail --backtitle "Community Apps Update" --title "Update" \
+      --yesno "Update worker script?\n\nCurrent: ${old_hash}\nNew:      ${new_hash}" 10 60; then
+      install -m 0755 "$tmp" "$LOCAL_SCRIPT"
+      msg_ok "Updated ${LOCAL_SCRIPT}"
+    else
+      rm -f "$tmp"
+      msg_info "Worker script update skipped."
+    fi
   fi
 
-  if command -v diff &>/dev/null; then
-    diff --color=always "$LOCAL_SCRIPT" "$tmp" 2>/dev/null || true
+  # ── Update: Logrotate config ────────────────────────────────────────────
+  local logrotate_tmp
+  logrotate_tmp=$(mktemp)
+  msg_info "Checking logrotate config..."
+  if curl -fsSL -o "$logrotate_tmp" "$LOGROTATE_URL"; then
+    if [ -f "$LOGROTATE_FILE" ]; then
+      local logrotate_new logrotate_old
+      logrotate_new=$(sha256sum "$logrotate_tmp" | awk '{print $1}')
+      logrotate_old=$(sha256sum "$LOGROTATE_FILE" | awk '{print $1}')
+
+      if [ "$logrotate_new" = "$logrotate_old" ]; then
+        msg_ok "Logrotate config already up-to-date."
+      else
+        if command -v diff &>/dev/null; then
+          diff --color=always "$LOGROTATE_FILE" "$logrotate_tmp" 2>/dev/null || true
+        fi
+
+        echo ""
+        if whiptail --backtitle "Community Apps Update" --title "Update Logrotate Config" \
+          --yesno "Update logrotate config?\n\nCurrent: ${logrotate_old}\nNew:      ${logrotate_new}" 10 60; then
+          cp "$logrotate_tmp" "$LOGROTATE_FILE"
+          msg_ok "Updated ${LOGROTATE_FILE}"
+        else
+          msg_info "Logrotate config update skipped."
+        fi
+      fi
+    else
+      # No existing logrotate config; install it fresh
+      cp "$logrotate_tmp" "$LOGROTATE_FILE"
+      msg_ok "Installed logrotate config to ${LOGROTATE_FILE}"
+    fi
+  else
+    msg_info "Skipping logrotate update (could not download ${LOGROTATE_URL})"
+  fi
+  rm -f "$logrotate_tmp"
+
+  # ── Regenerate: Wrapper script ──────────────────────────────────────────
+  # The wrapper template lives inside install.sh's write_config() function.
+  # Re-running write_config with values from the existing config file picks
+  # up any template changes without altering user settings.
+  if [ -f "$CONFIG_FILE" ]; then
+    msg_info "Regenerating wrapper script..."
+    source "$CONFIG_FILE"
+    write_config \
+      "$(echo "${SCHEDULE:-0 0 * * 0}" | awk '{print $1}')" \
+      "$(echo "${SCHEDULE:-0 0 * * 0}" | awk '{print $2}')" \
+      "$(echo "${SCHEDULE:-0 0 * * 0}" | awk '{print $3}')" \
+      "$(echo "${SCHEDULE:-0 0 * * 0}" | awk '{print $4}')" \
+      "$(echo "${SCHEDULE:-0 0 * * 0}" | awk '{print $5}')" \
+      "${CONTAINER_IDS:-}" \
+      "${BACKUP_STORAGE:-}" \
+      "${NOTIFY:-yes}" \
+      "${BACKUP:-yes}" \
+      "${DRY_RUN:-no}"
+    msg_ok "Regenerated ${WRAPPER_SCRIPT}"
   fi
 
-  echo ""
-  echo -e "  ${BLUE}Current SHA256:${NC} ${old_hash}"
-  echo -e "  ${BLUE}New SHA256:${NC}     ${new_hash}"
-  echo ""
-
-  if ! whiptail --backtitle "Community Apps Update" --title "Update" \
-    --yesno "Apply update?\n\nCurrent: ${old_hash}\nNew:      ${new_hash}" 10 60; then
-    rm -f "$tmp"
-    msg_info "Update cancelled."
-    return
-  fi
-
-  install -m 0755 "$tmp" "$LOCAL_SCRIPT"
-  rm -f "$tmp"
-  msg_ok "Updated ${LOCAL_SCRIPT}"
   echo ""
   read -rp "Press Enter to continue..."
 }
