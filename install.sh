@@ -892,6 +892,7 @@ update_script() {
     if whiptail --backtitle "Community Apps Update" --title "Update" \
       --yesno "Update worker script?\n\nCurrent: ${old_hash}\nNew:      ${new_hash}" 10 60; then
       install -m 0755 "$tmp" "$LOCAL_SCRIPT"
+      rm -f "$tmp"
       msg_ok "Updated ${LOCAL_SCRIPT}"
     else
       rm -f "$tmp"
@@ -905,6 +906,18 @@ update_script() {
   msg_info "Checking logrotate config..."
   if curl -fsSL -o "$logrotate_tmp" "$LOGROTATE_URL"; then
     if [ -f "$LOGROTATE_FILE" ]; then
+      # Carry forward the user's custom retention settings from the installed
+      # logrotate config so updates don't silently reset them to defaults.
+      local user_maxage user_rotate
+      user_maxage=$(awk '/^[[:space:]]*maxage[[:space:]]/ { print $2; exit }' "$LOGROTATE_FILE")
+      user_rotate=$(awk '/^[[:space:]]*rotate[[:space:]]/ { print $2; exit }' "$LOGROTATE_FILE")
+      if [ -n "$user_maxage" ]; then
+        sed -i "s/^\([[:space:]]*maxage[[:space:]]\+\).*/\1${user_maxage}/" "$logrotate_tmp"
+      fi
+      if [ -n "$user_rotate" ]; then
+        sed -i "s/^\([[:space:]]*rotate[[:space:]]\+\).*/\1${user_rotate}/" "$logrotate_tmp"
+      fi
+
       local logrotate_new logrotate_old
       logrotate_new=$(sha256sum "$logrotate_tmp" | awk '{print $1}')
       logrotate_old=$(sha256sum "$LOGROTATE_FILE" | awk '{print $1}')
