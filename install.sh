@@ -172,7 +172,7 @@ select_backup_storage() {
 # ── Log management ───────────────────────────────────────────────────────────
 write_logrotate_config() {
   local retention_days="${1:-28}"
-  local cron_rotations="${2:-4}"
+  local cron_rotations="${2:-3}"
 
   cat >"$LOGROTATE_FILE" <<EOF
 # Timestamped worker logs created by update-community-apps.sh.
@@ -191,8 +191,9 @@ write_logrotate_config() {
 
 # Stable cron wrapper log that receives stdout/stderr from scheduled runs.
 /var/log/update-community-apps-cron.log {
-    weekly
+    daily
     rotate ${cron_rotations}
+    maxsize 10M
     missingok
     notifempty
     compress
@@ -223,7 +224,7 @@ change_log_retention() {
     return
   fi
 
-  write_logrotate_config "$retention" 4
+  write_logrotate_config "$retention" 3
   msg_ok "Log retention set to ${retention} days in ${LOGROTATE_FILE}"
   echo ""
   read -rp "Press Enter to continue..."

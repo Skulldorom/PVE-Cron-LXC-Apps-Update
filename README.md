@@ -25,11 +25,11 @@ This launches an interactive whiptail menu that:
   - `var_continue_on_error=yes` — continue to next CT if one fails
   - `var_auto_reboot=yes` — reboot CT if app requires it
 - **Per-container error resilience** — one container failing does not abort the run; downstream processing (summary, notification, status file) always executes
-- **Clean readable logs** — produces a sanitized `-clean.log` alongside the raw terminal-noise log; the clean log is safe to `cat`, `grep`, and view
+- **Clean readable logs** — produces a sanitized `-clean.log` alongside the raw terminal-noise log; repeated terminal redraw lines are deduplicated so the clean log is safe to `cat`, `grep`, and view
 - **Last-run status file** — writes `/var/log/update-community-apps-last-status` with exit code, timestamp, containers, and error count; the installer Status menu reads it for ✅/❌ display
 - Captures the summary table for quick review
 - Optionally sends the summary followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed through Proxmox VE's default notification pipeline
-- Full output logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log`
+- Full upstream output is logged to `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` without duplicating it into the stable cron log
 
 ## Manual Usage
 
@@ -88,7 +88,7 @@ The installer's **Edit Config** menu shows each current value and lets you keep 
 
 - **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
-- **Log monitoring** — check `/var/log/update-community-apps-*-clean.log` for readable run output. Raw terminal-noise logs are preserved alongside for debugging. Notification delivery failures are logged as `[WARN]` lines in the clean log.
+- **Log monitoring** — check `/var/log/update-community-apps-*-clean.log` for readable run output. Raw terminal-noise logs are preserved alongside for debugging, but are not duplicated into `/var/log/update-community-apps-cron.log`. Notification delivery failures are logged as `[WARN]` lines in the clean log.
 
 ## Files
 
@@ -104,7 +104,7 @@ The installer's **Edit Config** menu shows each current value and lets you keep 
 
 ### Log Rotation
 
-Each run creates a timestamped worker log file. Timestamped logs accumulate because every run uses a unique path, so the included logrotate config uses a `maxage 28` cleanup policy to delete worker logs older than 28 days. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log` and keeps 4 weekly rotations.
+Each run creates a timestamped worker log file. Timestamped logs accumulate because every run uses a unique path, so the included logrotate config uses a `maxage 28` cleanup policy to delete worker logs older than 28 days. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log`, rotates daily, keeps 3 compressed rotations, and rotates early at 10 MB.
 
 To prevent unbounded accumulation, install the included logrotate config:
 
@@ -119,7 +119,7 @@ curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update
   -o /etc/logrotate.d/update-community-apps
 ```
 
-This removes timestamped worker logs older than 28 days, and keeps 4 weekly rotations of the stable cron log, with compression enabled for both. The installer also includes a **Logs** menu where you can change the timestamped worker log retention period, browse all current updater logs, or delete current updater logs.
+This removes timestamped worker logs older than 28 days, and keeps 3 compressed daily rotations of the stable cron log with a 10 MB max size. The installer also includes a **Logs** menu where you can change the timestamped worker log retention period, browse all current updater logs, or delete current updater logs.
 
 ## Installer Menu Options
 
