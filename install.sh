@@ -431,16 +431,16 @@ prompt_yes_no_value() {
   if [ "$current" = "yes" ]; then
     if whiptail --backtitle "Community Apps Update" --title "$title" \
       --yesno "$message" 10 65; then
-      echo "yes"
+      PROMPT_YES_NO_VALUE="yes"
     else
-      echo "no"
+      PROMPT_YES_NO_VALUE="no"
     fi
   else
     if whiptail --backtitle "Community Apps Update" --title "$title" \
       --defaultno --yesno "$message" 10 65; then
-      echo "yes"
+      PROMPT_YES_NO_VALUE="yes"
     else
-      echo "no"
+      PROMPT_YES_NO_VALUE="no"
     fi
   fi
 }
@@ -448,9 +448,10 @@ prompt_yes_no_value() {
 configure_backup_flow() {
   local title_prefix="$1" current_backup="${2:-yes}" backup storage
 
-  backup=$(prompt_yes_no_value "${title_prefix} — Backups" \
+  prompt_yes_no_value "${title_prefix} — Backups" \
     "Allow pre-update backups?\n\nIf enabled, the next screen will ask which storage to use for vzdump backups." \
-    "$current_backup") || return 1
+    "$current_backup" || return 1
+  backup="$PROMPT_YES_NO_VALUE"
 
   if [ "$backup" = "yes" ]; then
     storage=$(select_backup_storage "${title_prefix} — Backup Storage") || return 1
@@ -462,7 +463,8 @@ configure_backup_flow() {
     storage=""
   fi
 
-  printf '%s\t%s\n' "$backup" "$storage"
+  BACKUP_FLOW_BACKUP="$backup"
+  BACKUP_FLOW_STORAGE="$storage"
 }
 
 edit_config() {
@@ -503,17 +505,13 @@ edit_config() {
   # ── Edit: Backups + Storage ───────────────────────────────────────────────
   local storage_display="${storage:-not selected}"
   if ask_change_setting "Edit Config — Backups" "Backups and backup storage" "backups=${backup}, storage=${storage_display}"; then
-    # NOTE: Must NOT wrap configure_backup_flow in $() — same whiptail/newt
-    # rendering issue as in install_and_configure.
-    local backup_tempfile
-    backup_tempfile=$(mktemp)
-    if ! configure_backup_flow "Edit Config" "$backup" > "$backup_tempfile"; then
-      rm -f "$backup_tempfile"
+    # configure_backup_flow drives whiptail dialogs. Do not capture or redirect
+    # its stdout; Proxmox's shell console may send dialog paint bytes there.
+    if ! configure_backup_flow "Edit Config" "$backup"; then
       return
     fi
-    backup=$(cut -f1 "$backup_tempfile")
-    storage=$(cut -f2- "$backup_tempfile")
-    rm -f "$backup_tempfile"
+    backup="$BACKUP_FLOW_BACKUP"
+    storage="$BACKUP_FLOW_STORAGE"
   fi
 
   # ── Edit: Schedule ────────────────────────────────────────────────────────
@@ -583,12 +581,14 @@ edit_config() {
 
   # ── Edit: Notifications ──────────────────────────────────────────────────
   if ask_change_setting "Edit Config — Notifications" "Notifications" "$notify"; then
-    notify=$(prompt_yes_no_value "Edit Config — Notifications" "Enable notifications?" "$notify") || return
+    prompt_yes_no_value "Edit Config — Notifications" "Enable notifications?" "$notify" || return
+    notify="$PROMPT_YES_NO_VALUE"
   fi
 
   # ── Edit: Dry-run ─────────────────────────────────────────────────────────
   if ask_change_setting "Edit Config — Mode" "Dry-run mode" "$dry"; then
-    dry=$(prompt_yes_no_value "Edit Config — Mode" "Enable dry-run mode?\n\nChecks for updates without applying them." "$dry") || return
+    prompt_yes_no_value "Edit Config — Mode" "Enable dry-run mode?\n\nChecks for updates without applying them." "$dry" || return
+    dry="$PROMPT_YES_NO_VALUE"
   fi
 
   # ── Review ───────────────────────────────────────────────────────────────
@@ -1149,18 +1149,13 @@ install_and_configure() {
   fi
 
   # ── Step 5b: Backups + Storage ────────────────────────────────────────────
-  # NOTE: Must NOT wrap configure_backup_flow in $() — the nested subshell
-  # inside $() prevents whiptail/newt from rendering its dialog UI on
-  # Proxmox, causing the UI to disappear and the process to hang.
-  local backup_tempfile
-  backup_tempfile=$(mktemp)
-  if ! configure_backup_flow "Install" "yes" > "$backup_tempfile"; then
-    rm -f "$backup_tempfile"
+  # configure_backup_flow drives whiptail dialogs. Do not capture or redirect
+  # its stdout; Proxmox's shell console may send dialog paint bytes there.
+  if ! configure_backup_flow "Install" "yes"; then
     return
   fi
-  BACKUP=$(cut -f1 "$backup_tempfile")
-  BACKUP_STORAGE=$(cut -f2- "$backup_tempfile")
-  rm -f "$backup_tempfile"
+  BACKUP="$BACKUP_FLOW_BACKUP"
+  BACKUP_STORAGE="$BACKUP_FLOW_STORAGE"
 
   # ── Step 6: Dry-run mode ─────────────────────────────────────────────────
   if whiptail --backtitle "Community Apps Update" --title "Mode" \
