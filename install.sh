@@ -102,48 +102,47 @@ discover_containers() {
 }
 
 # ── Discover backup-capable storages ─────────────────────────────────────────
+# Uses the same detection logic as the upstream community-scripts update-apps.sh,
+# with the addition of per-node filtering (nodes directive in storage.cfg).
 discover_storages() {
   STORAGE_ITEMS=()
-  local node_name storages
+  local node_name
   node_name=$(hostname -s)
 
+  local storages
   storages=$(awk -v node="$node_name" '
-    function trim(value) {
-      gsub(/^[ \t]+|[ \t]+$/, "", value)
-      return value
-    }
-    function node_allowed(nodes, item_count, node_items, i) {
-      nodes = trim(nodes)
+    function node_allowed(nodes) {
       if (nodes == "") return 1
-      item_count = split(nodes, node_items, /[,[:space:]]+/)
-      for (i = 1; i <= item_count; i++) {
+      split(nodes, node_items, /[[:space:],]+/)
+      for (i in node_items) {
         if (node_items[i] == node) return 1
       }
       return 0
     }
-    function print_if_allowed() {
-      if (name == "") return
-      if ((has_backup || (!has_content && type == "dir")) && node_allowed(nodes)) print name
-    }
     /^[a-z]+:/ {
-      print_if_allowed()
+      if (name != "" && (has_backup || (!has_content && type == "dir")) && node_allowed(nodes)) {
+        print name
+      }
       split($0, a, ":")
       type = a[1]
-      name = trim(a[2])
+      name = a[2]
+      gsub(/^[ \t]+|[ \t]+$/, "", name)
       has_content = 0
       has_backup = 0
       nodes = ""
     }
     /^[ \t]*content[ \t]/ {
       has_content = 1
-      if ($0 ~ /(^|[ ,])backup([, ]|$)/) has_backup = 1
+      if ($0 ~ /backup/) has_backup = 1
     }
     /^[ \t]*nodes[ \t]/ {
       sub(/^[ \t]*nodes[ \t]+/, "", $0)
       nodes = $0
     }
     END {
-      print_if_allowed()
+      if (name != "" && (has_backup || (!has_content && type == "dir")) && node_allowed(nodes)) {
+        print name
+      }
     }
   ' /etc/pve/storage.cfg)
 
