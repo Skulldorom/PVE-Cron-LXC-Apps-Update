@@ -174,10 +174,10 @@ write_logrotate_config() {
   local cron_rotations="${2:-3}"
 
   cat >"$LOGROTATE_FILE" <<EOF
-# Timestamped clean worker logs created by update-community-apps.sh.
+# Timestamped worker logs created by update-community-apps.sh.
 # These files do not receive additional writes after each run finishes, so
-# maxage is the retention mechanism that removes old timestamped clean logs.
-/var/log/update-community-apps-[0-9]*_[0-9]*-clean.log {
+# maxage is the retention mechanism that removes old timestamped logs.
+/var/log/update-community-apps-[0-9]*_[0-9]*.log {
     weekly
     maxage ${retention_days}
     missingok
@@ -234,7 +234,7 @@ view_logs() {
     size=$(du -h "$log" 2>/dev/null | awk '{print $1}')
     modified=$(stat -c '%y' "$log" 2>/dev/null | cut -d. -f1)
     logs+=("$log" "${size:-?}  ${modified:-unknown}")
-  done < <(find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*-clean.log' -o -name 'update-community-apps-cron.log*' \) -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /, ""); print }')
+  done < <(find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*.log' -o -name 'update-community-apps-cron.log*' \) -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /, ""); print }')
 
   if [ ${#logs[@]} -eq 0 ]; then
     whiptail --backtitle "Community Apps Update" --title "Logs" \
@@ -253,7 +253,7 @@ view_logs() {
 
 delete_logs() {
   local count=0
-  count=$(find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*-clean.log' -o -name 'update-community-apps-cron.log*' \) -type f 2>/dev/null | wc -l)
+  count=$(find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*.log' -o -name 'update-community-apps-cron.log*' \) -type f 2>/dev/null | wc -l)
 
   if [ "$count" -eq 0 ]; then
     whiptail --backtitle "Community Apps Update" --title "Delete Logs" \
@@ -262,11 +262,11 @@ delete_logs() {
   fi
 
   if ! whiptail --backtitle "Community Apps Update" --title "Delete Logs" \
-    --yesno "Delete ${count} update-community-apps log file(s) from /var/log?\n\nThis includes timestamped clean worker logs and cron logs/rotations." 10 70; then
+    --yesno "Delete ${count} update-community-apps log file(s) from /var/log?\n\nThis includes timestamped worker logs and cron logs/rotations." 10 70; then
     return
   fi
 
-  find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*-clean.log' -o -name 'update-community-apps-cron.log*' \) -type f -delete 2>/dev/null || true
+  find /var/log -maxdepth 1 \( -name 'update-community-apps-[0-9]*_[0-9]*.log' -o -name 'update-community-apps-cron.log*' \) -type f -delete 2>/dev/null || true
   msg_ok "Deleted update-community-apps logs."
   echo ""
   read -rp "Press Enter to continue..."
