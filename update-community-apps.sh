@@ -36,7 +36,6 @@ fi
 NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 TIMESTAMP_FILE="$(date '+%Y%m%d_%H%M%S')"
-LOG_FILE="/var/log/update-community-apps-${TIMESTAMP_FILE}.log"
 LOG_FILE_CLEAN="/var/log/update-community-apps-${TIMESTAMP_FILE}-clean.log"
 STATUS_FILE="/var/log/update-community-apps-last-status"
 
@@ -68,25 +67,24 @@ env_args=(
 # the upstream script fails on individual containers.
 EXIT_CODE=0
 tmp="$(mktemp)"
+UPSTREAM_OUTPUT="$(mktemp)"
 if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh; then
-  echo "[ERROR] Failed to download upstream update script" | tee -a "$LOG_FILE" >&2
+  echo "[ERROR] Failed to download upstream update script" | tee -a "$LOG_FILE_CLEAN" >&2
   EXIT_CODE=1
-  rm -f "$tmp"
+  rm -f "$tmp" "$UPSTREAM_OUTPUT"
 else
-  # Preserve the full upstream output in the timestamped worker log, but do not
-  # also stream it to stdout. Cron captures stdout/stderr into the stable cron
-  # log, so allowing tee to echo the full upstream TTY output duplicates large
-  # logs and can fill small/log2ram-backed /var/log filesystems. The concise
-  # summary below remains on stdout for cron logging.
-  env "${env_args[@]}" bash "$tmp" 2>&1 | tee "$LOG_FILE" >/dev/null || true
-  EXIT_CODE=${PIPESTATUS[0]}
+  # Capture upstream's noisy TTY-style stream only long enough to sanitize it.
+  # The persisted per-run artifact is the clean log; keeping a second raw copy
+  # mostly preserves spinner confetti and wastes small/log2ram-backed /var/log.
+  env "${env_args[@]}" bash "$tmp" >"$UPSTREAM_OUTPUT" 2>&1
+  EXIT_CODE=$?
   rm -f "$tmp"
 fi
 
 # ── Produce a clean readable log (I2 fix) ─────────────────────────────────────
 # The upstream script writes terminal escape codes, ANSI sequences, redraws,
-# and banners to stdout. The raw log is preserved for debugging, but we also
-# produce a clean version that is safe to cat / view / grep.
+# and banners to stdout. Keep only a clean persisted log that is safe to
+# cat / view / grep.
 dedupe_log_redraws() {
   awk '
     function trim(value) {
@@ -116,17 +114,27 @@ sanitize_log_for_file() {
     s/\r\n/\n/g;
     s/\r/\n/g;
     s/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]//g;
+    # Canonicalize Braille spinner frames before awk dedupe so rotating
+    # progress redraws compare as the same normalized line.
+    s/^([ \t]*)[\x{280B}\x{2819}\x{2839}\x{2838}\x{283C}\x{2834}\x{2826}\x{2827}\x{2807}\x{280F}]([ \t]+)/${1}⠋${2}/gm;
   ' | dedupe_log_redraws
 }
 
-if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
-  sanitize_log_for_file < "$LOG_FILE" > "$LOG_FILE_CLEAN" 2>/dev/null || true
+if [ -f "$UPSTREAM_OUTPUT" ] && [ -s "$UPSTREAM_OUTPUT" ]; then
+  UPSTREAM_FULL_LOG=$(awk -F'Full log: ' '/Full log: / { value=$2 } END { print value }' "$UPSTREAM_OUTPUT" 2>/dev/null | tr -d '\r' || true)
+  if [ -n "$UPSTREAM_FULL_LOG" ] && [ -r "$UPSTREAM_FULL_LOG" ]; then
+    sanitize_log_for_file < "$UPSTREAM_FULL_LOG" > "$LOG_FILE_CLEAN" 2>/dev/null || true
+  else
+    # Fallback for upstream format changes or missing files: keep a readable log
+    # rather than no log at all.
+    sanitize_log_for_file < "$UPSTREAM_OUTPUT" > "$LOG_FILE_CLEAN" 2>/dev/null || true
+  fi
 fi
+rm -f "$UPSTREAM_OUTPUT"
 
 # ── Extract summary table (I1 fix: guarded) ───────────────────────────────────
 # Use the clean log for extraction to avoid escape-sequence interference.
 LOG_FOR_PARSE="${LOG_FILE_CLEAN}"
-[ -s "$LOG_FOR_PARSE" ] || LOG_FOR_PARSE="$LOG_FILE"
 
 TABLE=$(awk '
   /━━━━/{
@@ -183,7 +191,6 @@ ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || echo 0)
   echo "dry_run=${DRY_RUN}"
   echo "notify=${NOTIFY}"
   echo "errors_count=${ERROR_COUNT}"
-  echo "log_file=${LOG_FILE}"
   echo "log_file_clean=${LOG_FILE_CLEAN}"
 } > "$STATUS_FILE" 2>/dev/null || true
 
@@ -211,6 +218,9 @@ sanitize_log_for_notification() {
     s/\r\n/\n/g;
     s/\r/\n/g;
     s/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]//g;
+    # Canonicalize Braille spinner frames before awk dedupe so rotating
+    # progress redraws compare as the same normalized line.
+    s/^([ \t]*)[\x{280B}\x{2819}\x{2839}\x{2838}\x{283C}\x{2834}\x{2826}\x{2827}\x{2807}\x{280F}]([ \t]+)/${1}⠋${2}/gm;
   ' | awk '
     function trim(value) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
@@ -265,7 +275,6 @@ echo ""
 [ -n "$TABLE" ] && echo "$TABLE"
 [ -n "$EXIT_INFO" ] && echo "$EXIT_INFO"
 echo ""
-echo "Log: $LOG_FILE"
 echo "Clean log: $LOG_FILE_CLEAN"
 
 # Notification (if enabled)
@@ -292,7 +301,7 @@ if [ "$NOTIFY" = "yes" ]; then
     if [ -n "$LOG_WITHOUT_SUMMARY" ]; then
       echo "$LOG_WITHOUT_SUMMARY"
     else
-      cat "$LOG_FILE" 2>/dev/null || true
+      cat "$LOG_FILE_CLEAN" 2>/dev/null || true
     fi | sanitize_log_for_notification
   } | ascii_for_notification > "$NOTIFICATION_BODY" 2>/dev/null || true
 
