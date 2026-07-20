@@ -25,11 +25,11 @@ This launches an interactive whiptail menu that:
   - `var_continue_on_error=yes` — continue to next CT if one fails
   - `var_auto_reboot=yes` — reboot CT if app requires it
 - **Per-container error resilience** — one container failing does not abort the run; downstream processing (summary, notification, status file) always executes
-- **Clean readable logs only** — produces a single `-clean.log` per run from upstream's own `Full log:` file; raw terminal-noise output is only held temporarily as a fallback
+- **Clean readable logs only** — produces a single timestamped `.log` per run from upstream's own `Full log:` file; raw terminal-noise output is only held temporarily as a fallback
 - **Last-run status file** — writes `/var/log/update-community-apps-last-status` with exit code, timestamp, containers, and error count; the installer Status menu reads it for ✅/❌ display
 - Captures the summary table for quick review
 - Optionally sends the summary followed by the clean run log, with the ending summary removed, through Proxmox VE's default notification pipeline
-- Upstream's generated full log is copied into `/var/log/update-community-apps-YYYYMMDD_HHMMSS-clean.log` without duplicating noisy spinner output into the stable cron log
+- Upstream's generated full log is copied into `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` without duplicating noisy spinner output into the stable cron log
 
 ## Manual Usage
 
@@ -88,7 +88,7 @@ The installer's **Edit Config** menu shows each current value and lets you keep 
 
 - **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
-- **Log monitoring** — check `/var/log/update-community-apps-*-clean.log` for readable run output based on upstream's own `Full log:` file. Raw terminal-noise output is not kept as a separate timestamped log and is not duplicated into `/var/log/update-community-apps-cron.log`. Notification delivery failures are logged as `[WARN]` lines in the clean log.
+- **Log monitoring** — check `/var/log/update-community-apps-*.log` for readable run output based on upstream's own `Full log:` file. Raw terminal-noise output is not kept as a separate timestamped log and is not duplicated into `/var/log/update-community-apps-cron.log`. Notification delivery failures are logged as `[WARN]` lines in the worker log.
 
 ## Files
 
@@ -97,13 +97,13 @@ The installer's **Edit Config** menu shows each current value and lets you keep 
 | `/usr/local/bin/update-community-apps.sh` | The worker script (installed by `install.sh`) |
 | `/usr/local/bin/update-community-apps-wrapper.sh` | Cron wrapper — sources config, calls worker |
 | `/etc/update-community-apps/config` | Configuration file (source-able key=value pairs) |
-| `/var/log/update-community-apps-YYYYMMDD_HHMMSS-clean.log` | Per-run clean worker log copied from upstream's `Full log:` output |
+| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run worker log copied from upstream's `Full log:` output |
 | `/var/log/update-community-apps-cron.log` | Stable cron stdout/stderr log |
 | `/var/log/update-community-apps-last-status` | Last-run status (exit code, timestamp, errors) |
 
 ### Log Rotation
 
-Each run creates one timestamped clean worker log file. Timestamped logs accumulate because every run uses a unique path, so the included logrotate config uses a `maxage 28` cleanup policy to delete clean worker logs older than 28 days. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log`, rotates daily, keeps 3 compressed rotations, and rotates early at 10 MB.
+Each run creates one timestamped worker log file. Timestamped logs accumulate because every run uses a unique path, so the included logrotate config uses a `maxage 28` cleanup policy to delete worker logs older than 28 days. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log`, rotates daily, keeps 3 compressed rotations, and rotates early at 10 MB.
 
 To prevent unbounded accumulation, install the included logrotate config:
 

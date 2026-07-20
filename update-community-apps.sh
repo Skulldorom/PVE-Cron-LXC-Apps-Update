@@ -36,7 +36,7 @@ fi
 NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 TIMESTAMP_FILE="$(date '+%Y%m%d_%H%M%S')"
-LOG_FILE_CLEAN="/var/log/update-community-apps-${TIMESTAMP_FILE}-clean.log"
+LOG_FILE="/var/log/update-community-apps-${TIMESTAMP_FILE}.log"
 STATUS_FILE="/var/log/update-community-apps-last-status"
 
 # Accept IDs separated by commas and/or whitespace. Whiptail checklists return
@@ -69,7 +69,7 @@ EXIT_CODE=0
 tmp="$(mktemp)"
 UPSTREAM_OUTPUT="$(mktemp)"
 if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh; then
-  echo "[ERROR] Failed to download upstream update script" | tee -a "$LOG_FILE_CLEAN" >&2
+  echo "[ERROR] Failed to download upstream update script" | tee -a "$LOG_FILE" >&2
   EXIT_CODE=1
   rm -f "$tmp" "$UPSTREAM_OUTPUT"
 else
@@ -123,18 +123,18 @@ sanitize_log_for_file() {
 if [ -f "$UPSTREAM_OUTPUT" ] && [ -s "$UPSTREAM_OUTPUT" ]; then
   UPSTREAM_FULL_LOG=$(awk -F'Full log: ' '/Full log: / { value=$2 } END { print value }' "$UPSTREAM_OUTPUT" 2>/dev/null | tr -d '\r' || true)
   if [ -n "$UPSTREAM_FULL_LOG" ] && [ -r "$UPSTREAM_FULL_LOG" ]; then
-    sanitize_log_for_file < "$UPSTREAM_FULL_LOG" > "$LOG_FILE_CLEAN" 2>/dev/null || true
+    sanitize_log_for_file < "$UPSTREAM_FULL_LOG" > "$LOG_FILE" 2>/dev/null || true
   else
     # Fallback for upstream format changes or missing files: keep a readable log
     # rather than no log at all.
-    sanitize_log_for_file < "$UPSTREAM_OUTPUT" > "$LOG_FILE_CLEAN" 2>/dev/null || true
+    sanitize_log_for_file < "$UPSTREAM_OUTPUT" > "$LOG_FILE" 2>/dev/null || true
   fi
 fi
 rm -f "$UPSTREAM_OUTPUT"
 
 # ── Extract summary table (I1 fix: guarded) ───────────────────────────────────
 # Use the clean log for extraction to avoid escape-sequence interference.
-LOG_FOR_PARSE="${LOG_FILE_CLEAN}"
+LOG_FOR_PARSE="${LOG_FILE}"
 
 TABLE=$(awk '
   /━━━━/{
@@ -191,7 +191,7 @@ ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || echo 0)
   echo "dry_run=${DRY_RUN}"
   echo "notify=${NOTIFY}"
   echo "errors_count=${ERROR_COUNT}"
-  echo "log_file_clean=${LOG_FILE_CLEAN}"
+  echo "log_file=${LOG_FILE}"
 } > "$STATUS_FILE" 2>/dev/null || true
 
 # Proxmox webhook notification templates can be rendered or consumed by targets
@@ -275,7 +275,7 @@ echo ""
 [ -n "$TABLE" ] && echo "$TABLE"
 [ -n "$EXIT_INFO" ] && echo "$EXIT_INFO"
 echo ""
-echo "Clean log: $LOG_FILE_CLEAN"
+echo "Log: $LOG_FILE"
 
 # Notification (if enabled)
 if [ "$NOTIFY" = "yes" ]; then
@@ -301,7 +301,7 @@ if [ "$NOTIFY" = "yes" ]; then
     if [ -n "$LOG_WITHOUT_SUMMARY" ]; then
       echo "$LOG_WITHOUT_SUMMARY"
     else
-      cat "$LOG_FILE_CLEAN" 2>/dev/null || true
+      cat "$LOG_FILE" 2>/dev/null || true
     fi | sanitize_log_for_notification
   } | ascii_for_notification > "$NOTIFICATION_BODY" 2>/dev/null || true
 
