@@ -503,10 +503,17 @@ edit_config() {
   # ── Edit: Backups + Storage ───────────────────────────────────────────────
   local storage_display="${storage:-not selected}"
   if ask_change_setting "Edit Config — Backups" "Backups and backup storage" "backups=${backup}, storage=${storage_display}"; then
-    local backup_result
-    backup_result=$(configure_backup_flow "Edit Config" "$backup") || return
-    backup=$(printf '%s' "$backup_result" | cut -f1)
-    storage=$(printf '%s' "$backup_result" | cut -f2-)
+    # NOTE: Must NOT wrap configure_backup_flow in $() — same whiptail/newt
+    # rendering issue as in install_and_configure.
+    local backup_tempfile
+    backup_tempfile=$(mktemp)
+    if ! configure_backup_flow "Edit Config" "$backup" > "$backup_tempfile"; then
+      rm -f "$backup_tempfile"
+      return
+    fi
+    backup=$(cut -f1 "$backup_tempfile")
+    storage=$(cut -f2- "$backup_tempfile")
+    rm -f "$backup_tempfile"
   fi
 
   # ── Edit: Schedule ────────────────────────────────────────────────────────
@@ -1142,10 +1149,18 @@ install_and_configure() {
   fi
 
   # ── Step 5b: Backups + Storage ────────────────────────────────────────────
-  local backup_result
-  backup_result=$(configure_backup_flow "Install" "yes") || return
-  BACKUP=$(printf '%s' "$backup_result" | cut -f1)
-  BACKUP_STORAGE=$(printf '%s' "$backup_result" | cut -f2-)
+  # NOTE: Must NOT wrap configure_backup_flow in $() — the nested subshell
+  # inside $() prevents whiptail/newt from rendering its dialog UI on
+  # Proxmox, causing the UI to disappear and the process to hang.
+  local backup_tempfile
+  backup_tempfile=$(mktemp)
+  if ! configure_backup_flow "Install" "yes" > "$backup_tempfile"; then
+    rm -f "$backup_tempfile"
+    return
+  fi
+  BACKUP=$(cut -f1 "$backup_tempfile")
+  BACKUP_STORAGE=$(cut -f2- "$backup_tempfile")
+  rm -f "$backup_tempfile"
 
   # ── Step 6: Dry-run mode ─────────────────────────────────────────────────
   if whiptail --backtitle "Community Apps Update" --title "Mode" \
