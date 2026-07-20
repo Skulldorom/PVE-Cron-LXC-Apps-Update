@@ -38,6 +38,17 @@ TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 TIMESTAMP_FILE="$(date '+%Y%m%d_%H%M%S')"
 LOG_FILE="/var/log/update-community-apps-${TIMESTAMP_FILE}.log"
 STATUS_FILE="/var/log/update-community-apps-last-status"
+MAX_WORKER_LOG_BYTES="${MAX_WORKER_LOG_BYTES:-10485760}"
+MAX_UPSTREAM_CAPTURE_BYTES="${MAX_UPSTREAM_CAPTURE_BYTES:-1048576}"
+
+case "$MAX_WORKER_LOG_BYTES" in
+  ''|*[!0-9]*) MAX_WORKER_LOG_BYTES=10485760 ;;
+esac
+case "$MAX_UPSTREAM_CAPTURE_BYTES" in
+  ''|*[!0-9]*) MAX_UPSTREAM_CAPTURE_BYTES=1048576 ;;
+esac
+[ "$MAX_WORKER_LOG_BYTES" -lt 4096 ] && MAX_WORKER_LOG_BYTES=4096
+[ "$MAX_UPSTREAM_CAPTURE_BYTES" -lt 4096 ] && MAX_UPSTREAM_CAPTURE_BYTES=4096
 
 # Accept IDs separated by commas and/or whitespace. Whiptail checklists return
 # multiple selections as a space-separated list, while cron entries are stored as
@@ -73,11 +84,11 @@ if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/Pr
   EXIT_CODE=1
   rm -f "$tmp" "$UPSTREAM_OUTPUT"
 else
-  # Capture upstream's noisy TTY-style stream only long enough to sanitize it.
-  # The persisted per-run artifact is the clean log; keeping a second raw copy
-  # mostly preserves spinner confetti and wastes small/log2ram-backed /var/log.
-  env "${env_args[@]}" bash "$tmp" >"$UPSTREAM_OUTPUT" 2>&1
-  EXIT_CODE=$?
+  # Capture only the tail of upstream's noisy TTY-style stream. The useful
+  # upstream "Full log:" pointer is printed at the end, and tail -c keeps the
+  # temporary capture bounded even if spinner output goes feral mid-run.
+  env "${env_args[@]}" bash "$tmp" 2>&1 | tail -c "$MAX_UPSTREAM_CAPTURE_BYTES" >"$UPSTREAM_OUTPUT"
+  EXIT_CODE=${PIPESTATUS[0]}
   rm -f "$tmp"
 fi
 
@@ -120,14 +131,48 @@ sanitize_log_for_file() {
   ' | dedupe_log_redraws
 }
 
+write_capped_clean_log() {
+  local source="$1" dest="$2" size head_bytes tail_bytes tmp_dest
+  tmp_dest="$(mktemp)"
+  size=$(wc -c < "$source" 2>/dev/null || echo 0)
+
+  if [ "$size" -le "$MAX_WORKER_LOG_BYTES" ]; then
+    sanitize_log_for_file < "$source" > "$tmp_dest" 2>/dev/null || true
+  else
+    head_bytes=$(((MAX_WORKER_LOG_BYTES - 2048) / 2))
+    tail_bytes=$head_bytes
+    [ "$head_bytes" -lt 1024 ] && head_bytes=1024
+    [ "$tail_bytes" -lt 1024 ] && tail_bytes=1024
+    {
+      echo "[WARN] Log truncated by update-community-apps.sh to stay within ${MAX_WORKER_LOG_BYTES} bytes."
+      echo "[WARN] Original source log size: ${size} bytes. Showing first ${head_bytes} bytes and last ${tail_bytes} bytes."
+      echo ""
+      head -c "$head_bytes" "$source" | sanitize_log_for_file
+      echo ""
+      echo "[WARN] ... middle of log omitted due to size cap ..."
+      echo ""
+      tail -c "$tail_bytes" "$source" | sanitize_log_for_file
+    } > "$tmp_dest" 2>/dev/null || true
+  fi
+
+  # Final hard cap after sanitization and warning text. If a pathological input
+  # still expands past the limit, keep the tail containing the final summary.
+  if [ -s "$tmp_dest" ] && [ "$(wc -c < "$tmp_dest")" -gt "$MAX_WORKER_LOG_BYTES" ]; then
+    tail -c "$MAX_WORKER_LOG_BYTES" "$tmp_dest" > "$dest" 2>/dev/null || true
+    rm -f "$tmp_dest"
+  else
+    mv "$tmp_dest" "$dest" 2>/dev/null || rm -f "$tmp_dest"
+  fi
+}
+
 if [ -f "$UPSTREAM_OUTPUT" ] && [ -s "$UPSTREAM_OUTPUT" ]; then
   UPSTREAM_FULL_LOG=$(awk -F'Full log: ' '/Full log: / { value=$2 } END { print value }' "$UPSTREAM_OUTPUT" 2>/dev/null | tr -d '\r' || true)
   if [ -n "$UPSTREAM_FULL_LOG" ] && [ -r "$UPSTREAM_FULL_LOG" ]; then
-    sanitize_log_for_file < "$UPSTREAM_FULL_LOG" > "$LOG_FILE" 2>/dev/null || true
+    write_capped_clean_log "$UPSTREAM_FULL_LOG" "$LOG_FILE"
   else
     # Fallback for upstream format changes or missing files: keep a readable log
     # rather than no log at all.
-    sanitize_log_for_file < "$UPSTREAM_OUTPUT" > "$LOG_FILE" 2>/dev/null || true
+    write_capped_clean_log "$UPSTREAM_OUTPUT" "$LOG_FILE"
   fi
 fi
 rm -f "$UPSTREAM_OUTPUT"
@@ -192,6 +237,8 @@ ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || echo 0)
   echo "notify=${NOTIFY}"
   echo "errors_count=${ERROR_COUNT}"
   echo "log_file=${LOG_FILE}"
+  echo "max_worker_log_bytes=${MAX_WORKER_LOG_BYTES}"
+  echo "max_upstream_capture_bytes=${MAX_UPSTREAM_CAPTURE_BYTES}"
 } > "$STATUS_FILE" 2>/dev/null || true
 
 # Proxmox webhook notification templates can be rendered or consumed by targets

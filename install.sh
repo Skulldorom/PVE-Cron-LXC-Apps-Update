@@ -180,6 +180,7 @@ write_logrotate_config() {
 /var/log/update-community-apps-[0-9]*_[0-9]*.log {
     weekly
     maxage ${retention_days}
+    maxsize 10M
     missingok
     notifempty
     compress
