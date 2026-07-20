@@ -73,7 +73,12 @@ if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/Pr
   EXIT_CODE=1
   rm -f "$tmp"
 else
-  env "${env_args[@]}" bash "$tmp" 2>&1 | tee "$LOG_FILE" || true
+  # Preserve the full upstream output in the timestamped worker log, but do not
+  # also stream it to stdout. Cron captures stdout/stderr into the stable cron
+  # log, so allowing tee to echo the full upstream TTY output duplicates large
+  # logs and can fill small/log2ram-backed /var/log filesystems. The concise
+  # summary below remains on stdout for cron logging.
+  env "${env_args[@]}" bash "$tmp" 2>&1 | tee "$LOG_FILE" >/dev/null || true
   EXIT_CODE=${PIPESTATUS[0]}
   rm -f "$tmp"
 fi
@@ -82,6 +87,26 @@ fi
 # The upstream script writes terminal escape codes, ANSI sequences, redraws,
 # and banners to stdout. The raw log is preserved for debugging, but we also
 # produce a clean version that is safe to cat / view / grep.
+dedupe_log_redraws() {
+  awk '
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      return value
+    }
+    function normalize(value) {
+      value = trim(value)
+      gsub(/[[:space:]]+/, " ", value)
+      return value
+    }
+    {
+      normalized = normalize($0)
+      if (normalized != "" && normalized == last_normalized) next
+      last_normalized = normalized
+      print
+    }
+  '
+}
+
 sanitize_log_for_file() {
   LC_ALL=C.UTF-8 perl -CSDA -0pe '
     s/\e\][^\a]*(?:\a|\e\\)//g;
@@ -91,7 +116,7 @@ sanitize_log_for_file() {
     s/\r\n/\n/g;
     s/\r/\n/g;
     s/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]//g;
-  '
+  ' | dedupe_log_redraws
 }
 
 if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
