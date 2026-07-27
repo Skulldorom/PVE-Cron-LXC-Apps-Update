@@ -36,6 +36,10 @@ set -euo pipefail
 mkdir -p "$UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR"
 log="$UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR/$(date '+%Y%m%d_%H%M%S').log"
 echo "Update started: $(date '+%Y-%m-%d %H:%M:%S')" >"$log"
+if [ "${var_dry_run:-no}" != "yes" ]; then
+  echo "Expected dry-run mode but var_dry_run=${var_dry_run:-unset}" >>"$log"
+  exit 64
+fi
 echo "roxmox VE with tags: community-script, proxmox-helper-scripts. This may take a few seconds..."
 echo "??? Loading all possible LXC containers from Proxmox VE with tags: community-script, proxmox-helper-scripts. This may take a few seconds..."
 exit 127
@@ -54,6 +58,7 @@ sub notify {
   my $record = $ENV{PVE_NOTIFY_RECORD} || die "PVE_NOTIFY_RECORD missing";
   open(my $fh, '>', $record) or die "open notify record: $!";
   print {$fh} "severity=$severity\n";
+  print {$fh} "title=" . (($data && $data->{title}) || '') . "\n";
   print {$fh} "message=" . (($data && $data->{message}) || '') . "\n";
   close($fh);
   return 1;
@@ -70,7 +75,7 @@ UPDATE_COMMUNITY_APPS_STATUS_FILE="$STATUS_FILE" \
 UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR="$UPSTREAM_LOG_DIR" \
 NOTIFY=yes \
 BACKUP=no \
-bash "$ROOT/update-community-apps.sh" "101" >"$TMPDIR/stdout" 2>"$TMPDIR/stderr"
+bash "$ROOT/update-community-apps.sh" "101" dry-run >"$TMPDIR/stdout" 2>"$TMPDIR/stderr"
 exit_code=$?
 set -e
 
@@ -85,6 +90,11 @@ fi
 
 grep -q '^severity=error$' "$NOTIFY_RECORD" || {
   echo "Notification was not sent with error severity" >&2
+  cat "$NOTIFY_RECORD" >&2
+  exit 1
+}
+grep -q '^title=\[DRY-RUN\] Community Apps Update' "$NOTIFY_RECORD" || {
+  echo "Notification title did not indicate dry-run mode" >&2
   cat "$NOTIFY_RECORD" >&2
   exit 1
 }
