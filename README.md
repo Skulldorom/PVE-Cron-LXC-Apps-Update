@@ -58,6 +58,10 @@ BACKUP=no /usr/local/bin/update-community-apps.sh "101,102,105,109,111"
 | `BACKUP` | `yes` | Set to `no` to skip pre-update vzdump backups |
 | `MAX_WORKER_LOG_BYTES` | `10485760` | Maximum bytes for each persisted timestamped worker log |
 | `MAX_UPSTREAM_CAPTURE_BYTES` | `1048576` | Maximum bytes retained from upstream terminal output while looking for the `Full log:` pointer |
+| `UPDATE_COMMUNITY_APPS_LOG_DIR` | `/var/log` | Directory for timestamped worker logs; mainly useful for tests |
+| `UPDATE_COMMUNITY_APPS_STATUS_FILE` | `$UPDATE_COMMUNITY_APPS_LOG_DIR/update-community-apps-last-status` | Last-run status file path; mainly useful for tests |
+| `UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR` | `/usr/local/community-scripts/update_apps` | Directory where upstream `update-apps.sh` writes its full logs |
+| `UPDATE_COMMUNITY_APPS_UPSTREAM_SCRIPT_URL` | community-scripts raw GitHub URL | Upstream script URL; mainly useful for tests |
 
 ## Configuration
 
@@ -90,7 +94,7 @@ The installer's **Edit Config** menu shows each current value and lets you keep 
 
 - **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
 - **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
-- **Log monitoring** — check `/var/log/update-community-apps-*.log` for readable run output based on upstream's own `Full log:` file. Raw terminal-noise output is not kept as a separate timestamped log and is not duplicated into `/var/log/update-community-apps-cron.log`. Notification delivery failures are logged as `[WARN]` lines in the worker log.
+- **Log monitoring** — check `/var/log/update-community-apps-*.log` for readable run output based on upstream's own `Full log:` file. If upstream exits before printing that pointer, the wrapper falls back to the newest upstream log in `/usr/local/community-scripts/update_apps` created during the run. Raw terminal-noise output is not kept as a separate timestamped log and is not duplicated into `/var/log/update-community-apps-cron.log`. Notification delivery successes and failures are appended to the timestamped worker log; failures also print a warning to cron stderr.
 
 ## Files
 
@@ -121,6 +125,17 @@ curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update
 ```
 
 This removes timestamped worker logs older than 28 days, and keeps 3 compressed daily rotations of the stable cron log with a 10 MB max size. The installer also includes a **Logs** menu where you can change the timestamped worker log retention period, browse all current updater logs, or delete current updater logs.
+
+## Testing
+
+Run the local shell regression harness from the repository root:
+
+```bash
+bash -n update-community-apps.sh install.sh tests/run.sh
+bash tests/run.sh
+```
+
+The test fakes the upstream community-scripts updater and Proxmox notification module so it can validate the early-exit log fallback and notification diagnostics without a live Proxmox VE node.
 
 ## Installer Menu Options
 

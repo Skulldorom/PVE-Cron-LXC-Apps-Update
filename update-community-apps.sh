@@ -36,8 +36,11 @@ fi
 NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 TIMESTAMP_FILE="$(date '+%Y%m%d_%H%M%S')"
-LOG_FILE="/var/log/update-community-apps-${TIMESTAMP_FILE}.log"
-STATUS_FILE="/var/log/update-community-apps-last-status"
+LOG_DIR="${UPDATE_COMMUNITY_APPS_LOG_DIR:-/var/log}"
+STATUS_FILE="${UPDATE_COMMUNITY_APPS_STATUS_FILE:-${LOG_DIR}/update-community-apps-last-status}"
+UPSTREAM_LOG_DIR="${UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR:-/usr/local/community-scripts/update_apps}"
+UPSTREAM_SCRIPT_URL="${UPDATE_COMMUNITY_APPS_UPSTREAM_SCRIPT_URL:-https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh}"
+LOG_FILE="${LOG_DIR}/update-community-apps-${TIMESTAMP_FILE}.log"
 MAX_WORKER_LOG_BYTES="${MAX_WORKER_LOG_BYTES:-10485760}"
 MAX_UPSTREAM_CAPTURE_BYTES="${MAX_UPSTREAM_CAPTURE_BYTES:-1048576}"
 
@@ -49,6 +52,7 @@ case "$MAX_UPSTREAM_CAPTURE_BYTES" in
 esac
 [ "$MAX_WORKER_LOG_BYTES" -lt 4096 ] && MAX_WORKER_LOG_BYTES=4096
 [ "$MAX_UPSTREAM_CAPTURE_BYTES" -lt 4096 ] && MAX_UPSTREAM_CAPTURE_BYTES=4096
+mkdir -p "$LOG_DIR" 2>/dev/null || true
 
 # Accept IDs separated by commas and/or whitespace. Whiptail checklists return
 # multiple selections as a space-separated list, while cron entries are stored as
@@ -79,7 +83,8 @@ env_args=(
 EXIT_CODE=0
 tmp="$(mktemp)"
 UPSTREAM_OUTPUT="$(mktemp)"
-if ! curl -fsSL -o "$tmp" https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-apps.sh; then
+UPSTREAM_LOG_SCAN_MARKER="$(mktemp)"
+if ! curl -fsSL -o "$tmp" "$UPSTREAM_SCRIPT_URL"; then
   echo "[ERROR] Failed to download upstream update script" | tee -a "$LOG_FILE" >&2
   EXIT_CODE=1
   rm -f "$tmp" "$UPSTREAM_OUTPUT"
@@ -165,17 +170,39 @@ write_capped_clean_log() {
   fi
 }
 
+append_worker_log_note() {
+  printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+find_latest_upstream_log() {
+  [ -d "$UPSTREAM_LOG_DIR" ] || return 1
+  find "$UPSTREAM_LOG_DIR" -maxdepth 1 -type f -name '[0-9]*_[0-9]*.log' -newer "$UPSTREAM_LOG_SCAN_MARKER" -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr \
+    | awk 'NR == 1 { $1=""; sub(/^ /, ""); print; exit }'
+}
+
 if [ -f "$UPSTREAM_OUTPUT" ] && [ -s "$UPSTREAM_OUTPUT" ]; then
   UPSTREAM_FULL_LOG=$(awk -F'Full log: ' '/Full log: / { value=$2 } END { print value }' "$UPSTREAM_OUTPUT" 2>/dev/null | tr -d '\r' || true)
   if [ -n "$UPSTREAM_FULL_LOG" ] && [ -r "$UPSTREAM_FULL_LOG" ]; then
     write_capped_clean_log "$UPSTREAM_FULL_LOG" "$LOG_FILE"
+    append_worker_log_note "Copied upstream log from Full log pointer: $UPSTREAM_FULL_LOG"
+  elif UPSTREAM_FULL_LOG=$(find_latest_upstream_log) && [ -n "$UPSTREAM_FULL_LOG" ] && [ -r "$UPSTREAM_FULL_LOG" ]; then
+    write_capped_clean_log "$UPSTREAM_FULL_LOG" "$LOG_FILE"
+    append_worker_log_note "Copied latest upstream log because no Full log pointer was printed: $UPSTREAM_FULL_LOG"
   else
     # Fallback for upstream format changes or missing files: keep a readable log
     # rather than no log at all.
     write_capped_clean_log "$UPSTREAM_OUTPUT" "$LOG_FILE"
+    append_worker_log_note "Fell back to captured upstream terminal output; no readable upstream log file was found."
   fi
+elif UPSTREAM_FULL_LOG=$(find_latest_upstream_log) && [ -n "$UPSTREAM_FULL_LOG" ] && [ -r "$UPSTREAM_FULL_LOG" ]; then
+  write_capped_clean_log "$UPSTREAM_FULL_LOG" "$LOG_FILE"
+  append_worker_log_note "Copied latest upstream log after empty terminal capture: $UPSTREAM_FULL_LOG"
+else
+  : > "$LOG_FILE" 2>/dev/null || true
+  append_worker_log_note "No upstream output or upstream log file was available."
 fi
-rm -f "$UPSTREAM_OUTPUT"
+rm -f "$UPSTREAM_OUTPUT" "$UPSTREAM_LOG_SCAN_MARKER"
 
 # ── Extract summary table (I1 fix: guarded) ───────────────────────────────────
 # Use the clean log for extraction to avoid escape-sequence interference.
@@ -370,7 +397,8 @@ if [ "$NOTIFY" = "yes" ]; then
     echo "[WARN]  Could not create Proxmox notification template directory: $TEMPLATE_DIR" >&2
   fi
 
-  if ! TITLE="$TITLE" MESSAGE_FILE="$NOTIFICATION_BODY" SEVERITY="$SEVERITY" perl -MPVE::Notify -e '
+  NOTIFICATION_ERROR="$(mktemp)"
+  if TITLE="$TITLE" MESSAGE_FILE="$NOTIFICATION_BODY" SEVERITY="$SEVERITY" perl -MPVE::Notify -e '
     my $message = "";
     if (defined $ENV{MESSAGE_FILE} && open(my $fh, "<", $ENV{MESSAGE_FILE})) {
       local $/;
@@ -385,10 +413,16 @@ if [ "$NOTIFY" = "yes" ]; then
     };
     my $fields = { origin => "update-community-apps" };
     PVE::Notify::notify($ENV{SEVERITY} // "info", "simple", $data, $fields);
-  ' 2>/dev/null; then
+  ' 2>"$NOTIFICATION_ERROR"; then
+    append_worker_log_note "Proxmox notification queued with severity=${SEVERITY}."
+  else
     echo "[WARN]  Proxmox notification delivery failed" >&2
+    append_worker_log_note "Proxmox notification delivery failed. Check Proxmox notification targets/matchers and /var/log/update-community-apps-cron.log."
+    if [ -s "$NOTIFICATION_ERROR" ]; then
+      sanitize_log_for_file < "$NOTIFICATION_ERROR" | sed 's/^/[notify] /' >> "$LOG_FILE" 2>/dev/null || true
+    fi
   fi
-  rm -f "$NOTIFICATION_BODY"
+  rm -f "$NOTIFICATION_BODY" "$NOTIFICATION_ERROR"
 fi
 
 exit $EXIT_CODE
