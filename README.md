@@ -131,8 +131,10 @@ This removes timestamped worker logs older than 28 days, and keeps 3 compressed 
 Run the local shell regression harness from the repository root:
 
 ```bash
-bash -n update-community-apps.sh install.sh tests/run.sh
+bash -n update-community-apps.sh install.sh tests/*.sh
 bash tests/run.sh
+bash tests/cron-path.sh
+bash tests/notification-noise.sh
 ```
 
 The test fakes the upstream community-scripts updater and Proxmox notification module so it can validate the early-exit log fallback and notification diagnostics without a live Proxmox VE node.

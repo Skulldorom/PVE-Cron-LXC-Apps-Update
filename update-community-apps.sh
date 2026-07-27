@@ -177,6 +177,29 @@ write_capped_clean_log() {
   fi
 }
 
+filter_non_actionable_log_lines() {
+  awk '
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      return value
+    }
+    {
+      line = trim($0)
+      if (line == "") next
+      if (line ~ /^Update started:/) next
+      if (line ~ /Loading all possible LXC containers from Proxmox VE/) next
+      if (line ~ /^Loaded [0-9]+ containers$/) next
+      if (line ~ /Proxmox VE with tags: .*This may take a few seconds/) next
+      if (line ~ /with tags: community-script, proxmox-helper-scripts\. This may take a few seconds/) next
+      print
+    }
+  '
+}
+
+actionable_log_tail() {
+  tail -40 "$LOG_FOR_PARSE" 2>/dev/null | sanitize_log_for_file | filter_non_actionable_log_lines || true
+}
+
 append_worker_log_note() {
   printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null || true
 }
@@ -228,10 +251,14 @@ TABLE=$(awk '
   }
 ' "$LOG_FOR_PARSE" 2>/dev/null || true)
 
-# Fallback: if separator parsing fails (e.g. upstream format change),
-# send the last 40 lines so you always get something useful
+# Fallback: if separator parsing fails (e.g. upstream format change), include
+# actionable tail lines but do not promote spinner/progress redraws into the
+# notification summary.
 if [ -z "$TABLE" ]; then
-  TABLE=$(tail -40 "$LOG_FOR_PARSE" 2>/dev/null || true)
+  TABLE=$(actionable_log_tail)
+fi
+if [ -z "$TABLE" ]; then
+  TABLE="No summary table was produced. Check the run log for details: ${LOG_FILE}"
 fi
 
 EXIT_INFO=$(grep -E '^(Exit code:|Completed:)' "$LOG_FOR_PARSE" 2>/dev/null || true)
@@ -320,7 +347,10 @@ sanitize_log_for_notification() {
     /\/____/ { next }
     /^ *\/_\/ *$/ { next }
     /^ *[_\/]/ && /(__|___|\\|`)/ { next }
+    /^Update started:/ { next }
     /Loading all possible LXC containers from Proxmox VE/ { next }
+    /Proxmox VE with tags: .*This may take a few seconds/ { next }
+    /with tags: community-script, proxmox-helper-scripts\. This may take a few seconds/ { next }
     /^Loaded [0-9]+ containers$/ { next }
     /^$/ {
       if (started) pending_blank=1
