@@ -15,6 +15,13 @@
 # upstream script fails on individual containers.
 set -uo pipefail
 
+# Cron often runs with a tiny PATH that omits /usr/sbin, where Proxmox
+# commands such as pct and vzdump live. Export a Proxmox-safe PATH before
+# downloading/running the upstream updater so scheduled runs behave like
+# root's interactive shell.
+PATH="${PATH:-}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
 CONTAINERS="${1:?Usage: $0 <container_ids> [backup_storage] [dry-run]}"
 BACKUP_STORAGE="${2:-}"
 DRY_RUN=no
