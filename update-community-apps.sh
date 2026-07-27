@@ -250,7 +250,8 @@ LOG_WITHOUT_SUMMARY=$(awk '
 # Provides a machine-readable status that the installer's Status menu reads.
 # Also useful for monitoring scripts and debugging.
 CONTAINER_COUNT=$(echo "$CONTAINERS" | tr ',' '\n' | wc -l)
-ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || echo 0)
+ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || true)
+ERROR_COUNT=${ERROR_COUNT:-0}
 
 {
   echo "exit_code=${EXIT_CODE}"

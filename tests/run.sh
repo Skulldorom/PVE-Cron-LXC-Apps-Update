@@ -112,6 +112,16 @@ grep -q '^exit_code=234$' "$STATUS_FILE" || {
   cat "$STATUS_FILE" >&2
   exit 1
 }
+if [ "$(grep -c '^errors_count=' "$STATUS_FILE")" -ne 1 ]; then
+  echo "Status file must contain exactly one errors_count line" >&2
+  cat "$STATUS_FILE" >&2
+  exit 1
+fi
+if grep -qx '0' "$STATUS_FILE"; then
+  echo "Status file contains a stray bare zero line" >&2
+  cat "$STATUS_FILE" >&2
+  exit 1
+fi
 grep -q '^severity=error$' "$NOTIFY_RECORD" || {
   echo "Notification was not sent with error severity" >&2
   cat "$NOTIFY_RECORD" >&2
