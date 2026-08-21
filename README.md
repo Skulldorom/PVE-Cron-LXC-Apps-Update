@@ -4,6 +4,10 @@
 
 PVE-Cron-LXC-Apps-Update automates unattended updates for community-scripts-managed LXC containers on Proxmox VE. It runs update-apps.sh, backs up containers first, and posts a clean summary notification.
 
+<p align="center">
+  <a href="https://ko-fi.com/skulldorom"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
+</p>
+
 ## Quick Start
 
 ```bash
