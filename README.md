@@ -113,6 +113,14 @@ HEALTHCHECK_URL=""
 
 The config is parsed with a **constrained key/value reader**, never shell `source`, so a config file cannot execute arbitrary commands. Validation rejects invalid container IDs, malformed booleans, and `BACKUP=yes` without a storage target.
 
+Effective worker precedence is:
+
+```text
+built-in defaults < environment/default variables < config < explicit CLI arguments
+```
+
+Most importantly, an explicit `--dry-run` always remains a dry run even if the config contains `DRY_RUN="no"`.
+
 ## Upstream cache & fallback
 
 The worker downloads upstream `update-apps.sh` to a **last-known-good** cache so a transient GitHub / `raw.githubusercontent.com` / CDN / DNS outage does not prevent scheduled maintenance.
@@ -133,7 +141,7 @@ Attempt upstream refresh
 
 - Downloads go to a temporary file first, then are validated (non-empty, shebang, `bash -n`, not HTML) before atomic replacement.
 - A failed/empty/partial download **never** replaces a known-good cache.
-- SHA256, source URL and refresh timestamp are recorded in the cache metadata.
+- SHA256, source URL and refresh timestamp are recorded in the cache metadata for observability, change detection, and debugging. The SHA256 does **not** independently authenticate the upstream source.
 - The log clearly states whether the run used fresh or cached upstream code, and warns on fallback.
 - If neither a fresh download nor a valid cache is available, the run aborts safely and notifies.
 

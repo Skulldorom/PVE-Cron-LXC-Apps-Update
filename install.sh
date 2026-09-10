@@ -10,12 +10,12 @@ set -euo pipefail
 REPO_URL="https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update/main"
 SCRIPT_URL="${REPO_URL}/update-community-apps.sh"
 LOGROTATE_URL="${REPO_URL}/logrotate.conf"
-LOCAL_SCRIPT="/usr/local/bin/update-community-apps.sh"
-LOG_FILE="/var/log/update-community-apps-cron.log"
-LOGROTATE_FILE="/etc/logrotate.d/update-community-apps"
-CONFIG_FILE="/etc/update-community-apps.conf"
-OLD_CONFIG_FILE="/etc/update-community-apps/config"
-WRAPPER_SCRIPT="/usr/local/bin/update-community-apps-wrapper.sh"
+LOCAL_SCRIPT="${UPDATE_COMMUNITY_APPS_LOCAL_SCRIPT:-/usr/local/bin/update-community-apps.sh}"
+LOG_FILE="${UPDATE_COMMUNITY_APPS_CRON_LOG:-/var/log/update-community-apps-cron.log}"
+LOGROTATE_FILE="${UPDATE_COMMUNITY_APPS_LOGROTATE_FILE:-/etc/logrotate.d/update-community-apps}"
+CONFIG_FILE="${UPDATE_COMMUNITY_APPS_CONFIG_FILE:-/etc/update-community-apps.conf}"
+OLD_CONFIG_FILE="${UPDATE_COMMUNITY_APPS_OLD_CONFIG_FILE:-/etc/update-community-apps/config}"
+WRAPPER_SCRIPT="${UPDATE_COMMUNITY_APPS_WRAPPER_SCRIPT:-/usr/local/bin/update-community-apps-wrapper.sh}"
 TAGS="community-script|proxmox-helper-scripts"
 
 # ── Colour helpers ───────────────────────────────────────────────────────────
@@ -410,10 +410,10 @@ migrate_legacy_config() {
 
   msg_info "Migrating configuration from ${OLD_CONFIG_FILE} to ${CONFIG_FILE}..."
 
-  local sched
+  local sched mig_min mig_hour mig_day mig_month mig_dow
   sched=$(get_schedule)
-  # shellcheck disable=SC2046,SC2116
-  write_config $(echo "$sched") "$old_ct" "$old_storage" "${old_notify:-yes}" "${old_backup:-yes}" "${old_dry:-no}"
+  read -r mig_min mig_hour mig_day mig_month mig_dow <<< "$sched"
+  write_config "$mig_min" "$mig_hour" "$mig_day" "$mig_month" "$mig_dow" "$old_ct" "$old_storage" "${old_notify:-yes}" "${old_backup:-yes}" "${old_dry:-no}"
 
   # Point any existing cron entry at the worker, preserving the schedule.
   local entry old_sched
@@ -1035,10 +1035,10 @@ update_script() {
       read -rp "Press Enter to continue..."
       return
     fi
-    local sched
+    local sched regen_min regen_hour regen_day regen_month regen_dow
     sched=$(get_schedule)
-    # shellcheck disable=SC2046,SC2116
-    write_config $(echo "$sched") \
+    read -r regen_min regen_hour regen_day regen_month regen_dow <<< "$sched"
+    write_config "$regen_min" "$regen_hour" "$regen_day" "$regen_month" "$regen_dow" \
       "${CONTAINER_IDS:-}" \
       "${BACKUP_STORAGE:-}" \
       "${NOTIFY:-yes}" \
@@ -1386,6 +1386,11 @@ main_menu() {
 }
 
 # ── Entry point ──────────────────────────────────────────────────────────────
+if [ "${1:-}" = "--migrate-only" ]; then
+  migrate_legacy_config
+  exit 0
+fi
+
 check_root
 check_whiptail
 check_deps

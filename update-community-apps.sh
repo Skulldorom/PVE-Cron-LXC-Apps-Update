@@ -34,6 +34,11 @@ ALLOW_CACHED_UPSTREAM="${ALLOW_CACHED_UPSTREAM:-yes}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
 REFRESH_ONLY=no
 STATUS_ONLY=no
+CLI_DRY_RUN=no
+CLI_HAS_CONTAINERS=no
+CLI_CONTAINERS=""
+CLI_BACKUP_STORAGE=""
+CLI_BACKUP_STORAGE_SET=no
 
 normalize_bool() {
   case "${1:-}" in
@@ -75,19 +80,32 @@ load_config() {
 
 case "${1:-}" in
   --refresh-upstream-cache) REFRESH_ONLY=yes ;;
-  --status) STATUS_ONLY=yes; load_config || exit $? ;;
-  --dry-run) DRY_RUN=yes; load_config || exit $? ;;
-  --help|-h) echo "Usage: $0 [container_ids] [backup_storage] [dry-run]"; exit 0 ;;
+  --status) STATUS_ONLY=yes ;;
+  --dry-run) CLI_DRY_RUN=yes ;;
+  --help|-h) echo "Usage: $0 [--dry-run|--status|--refresh-upstream-cache] [container_ids] [backup_storage] [dry-run]"; exit 0 ;;
   *)
     if [ "$#" -gt 0 ]; then
-      CONTAINERS="$1"; BACKUP_STORAGE="${2:-}"
-      [ "${2:-}" = "dry-run" ] && { DRY_RUN=yes; BACKUP_STORAGE=""; }
-      [ "${3:-}" = "dry-run" ] && DRY_RUN=yes
-    else
-      load_config || exit $?
+      CLI_HAS_CONTAINERS=yes
+      CLI_CONTAINERS="$1"
+      CLI_BACKUP_STORAGE="${2:-}"
+      CLI_BACKUP_STORAGE_SET=yes
+      [ "${2:-}" = "dry-run" ] && { CLI_DRY_RUN=yes; CLI_BACKUP_STORAGE=""; CLI_BACKUP_STORAGE_SET=no; }
+      [ "${3:-}" = "dry-run" ] && CLI_DRY_RUN=yes
     fi
     ;;
 esac
+
+load_config || exit $?
+# Effective precedence: built-in defaults < environment/default variables < config < explicit CLI arguments.
+if [ "$CLI_HAS_CONTAINERS" = yes ]; then
+  CONTAINERS="$CLI_CONTAINERS"
+fi
+if [ "$CLI_BACKUP_STORAGE_SET" = yes ]; then
+  BACKUP_STORAGE="$CLI_BACKUP_STORAGE"
+fi
+if [ "$CLI_DRY_RUN" = yes ]; then
+  DRY_RUN=yes
+fi
 
 NODE_NAME="$(hostname -s)"
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -130,18 +148,6 @@ if [ "${STATUS_ONLY:-no}" != yes ] && [ "${REFRESH_ONLY:-no}" != yes ]; then
   fi
 fi
 
-env_args=(
-  var_container="$CONTAINERS"
-  var_backup="$BACKUP"
-  var_unattended=yes
-  var_skip_confirm=yes
-  var_continue_on_error=yes
-  var_auto_reboot="$AUTO_REBOOT"
-)
-
-[ "$BACKUP" = "yes" ] && env_args+=(var_backup_storage="$BACKUP_STORAGE")
-[ "$DRY_RUN" = "yes" ] && env_args+=(var_dry_run=yes)
-
 # Validate configuration after all sources (args/env/config) are merged.
 BACKUP=$(normalize_bool "$BACKUP") || { echo "[ERROR] Invalid BACKUP value" >&2; exit 2; }
 NOTIFY=$(normalize_bool "$NOTIFY") || { echo "[ERROR] Invalid NOTIFY value" >&2; exit 2; }
@@ -154,6 +160,18 @@ if [ "$BACKUP" = "yes" ] && { [ -z "$BACKUP_STORAGE" ] || ! valid_storage "$BACK
   exit 2
 fi
 valid_url_or_empty "$HEALTHCHECK_URL" || { echo "[ERROR] Invalid HEALTHCHECK_URL" >&2; exit 2; }
+
+env_args=(
+  var_container="$CONTAINERS"
+  var_backup="$BACKUP"
+  var_unattended=yes
+  var_skip_confirm=yes
+  var_continue_on_error=yes
+  var_auto_reboot="$AUTO_REBOOT"
+)
+
+[ "$BACKUP" = "yes" ] && env_args+=(var_backup_storage="$BACKUP_STORAGE")
+[ "$DRY_RUN" = "yes" ] && env_args+=(var_dry_run=yes)
 
 # ── Upstream cache (last-known-good update-apps.sh) ─────────────────────────
 sha_file() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
@@ -192,30 +210,46 @@ refresh_upstream_cache() {
   UPSTREAM_SHA256="$new"
 }
 select_upstream_script() {
-  append_worker_log_note "Refreshing upstream cache"
-  if [ "$UPSTREAM_REFRESH" = yes ] && refresh_upstream_cache; then
-    UPSTREAM_USED=fresh; UPSTREAM_REFRESH_STATUS=success
-    append_worker_log_note "Upstream refresh successful"
-    append_worker_log_note "Upstream SHA256: $UPSTREAM_SHA256"
-    append_worker_log_note "Using freshly downloaded upstream"
-    return 0
-  fi
   if [ "$UPSTREAM_REFRESH" = yes ]; then
+    append_worker_log_note "Refreshing upstream cache"
+    if refresh_upstream_cache; then
+      UPSTREAM_USED=fresh; UPSTREAM_REFRESH_STATUS=success
+      append_worker_log_note "Upstream refresh successful"
+      append_worker_log_note "Upstream SHA256: $UPSTREAM_SHA256"
+      append_worker_log_note "Using freshly downloaded upstream"
+      return 0
+    fi
     UPSTREAM_REFRESH_STATUS=failed
     append_worker_log_note "WARNING: upstream refresh failed"
   else
     UPSTREAM_REFRESH_STATUS=disabled
+    append_worker_log_note "Upstream refresh disabled by configuration"
   fi
-  if [ "$ALLOW_CACHED_UPSTREAM" = yes ] && script_sanity_valid "$CACHE_FILE"; then
+
+  if [ "$ALLOW_CACHED_UPSTREAM" != yes ]; then
+    echo "[ERROR] Cached upstream fallback is disabled and no fresh upstream is available" | tee -a "$LOG_FILE" >&2
+    return 1
+  fi
+
+  if script_sanity_valid "$CACHE_FILE"; then
     UPSTREAM_USED=cached
     UPSTREAM_SHA256=$(sha_file "$CACHE_FILE")
     UPSTREAM_CACHE_AGE=$(cache_age_seconds || echo unknown)
-    append_worker_log_note "WARNING: Using last-known-good cached update-apps.sh"
+    if [ "$UPSTREAM_REFRESH_STATUS" = disabled ]; then
+      append_worker_log_note "Using cached update-apps.sh because upstream refresh is disabled"
+    else
+      append_worker_log_note "WARNING: Using last-known-good cached update-apps.sh"
+    fi
     append_worker_log_note "Cached SHA256: $UPSTREAM_SHA256"
     append_worker_log_note "Cached age: $UPSTREAM_CACHE_AGE seconds"
     return 0
   fi
-  echo "[ERROR] No valid cached upstream update-apps.sh is available" | tee -a "$LOG_FILE" >&2
+
+  if [ "$UPSTREAM_REFRESH_STATUS" = disabled ]; then
+    echo "[ERROR] Upstream refresh is disabled and no valid cached update-apps.sh is available" | tee -a "$LOG_FILE" >&2
+  else
+    echo "[ERROR] Upstream refresh failed and no valid cached update-apps.sh is available" | tee -a "$LOG_FILE" >&2
+  fi
   return 1
 }
 healthcheck_ping() {
@@ -265,6 +299,7 @@ if ! flock -n 9; then
   echo "[WARN] Another update-community-apps run is already active; exiting."
   exit 0
 fi
+healthcheck_ping "/start"
 
 # ── Run upstream update script ────────────────────────────────────────────────
 # Capture the exit code explicitly rather than relying on set -e, so downstream
@@ -425,8 +460,13 @@ rm -f "$UPSTREAM_OUTPUT" "$UPSTREAM_LOG_SCAN_MARKER"
     echo "[$(date '+%H:%M:%S')] Upstream SHA256: $UPSTREAM_SHA256"
     echo "[$(date '+%H:%M:%S')] Using freshly downloaded upstream"
   elif [ "$UPSTREAM_USED" = cached ]; then
-    echo "[$(date '+%H:%M:%S')] WARNING: upstream refresh failed"
-    echo "[$(date '+%H:%M:%S')] Using last-known-good cached update-apps.sh"
+    if [ "$UPSTREAM_REFRESH_STATUS" = disabled ]; then
+      echo "[$(date '+%H:%M:%S')] Upstream refresh disabled by configuration"
+      echo "[$(date '+%H:%M:%S')] Using cached update-apps.sh because upstream refresh is disabled"
+    else
+      echo "[$(date '+%H:%M:%S')] WARNING: upstream refresh failed"
+      echo "[$(date '+%H:%M:%S')] Using last-known-good cached update-apps.sh"
+    fi
     echo "[$(date '+%H:%M:%S')] Cached SHA256: $UPSTREAM_SHA256"
     echo "[$(date '+%H:%M:%S')] Cached age: $UPSTREAM_CACHE_AGE seconds"
   fi
@@ -580,7 +620,6 @@ sanitize_log_for_notification() {
 }
 
 # Always print summary to stdout (for cron mail / log capture)
-healthcheck_ping "/start"
 echo "===== Community Apps Update - $NODE_NAME - $TIMESTAMP ====="
 if [ "$BACKUP" = "yes" ]; then
   echo "Containers: $CONTAINERS | Backup: $BACKUP_STORAGE | Backup enabled: yes"
