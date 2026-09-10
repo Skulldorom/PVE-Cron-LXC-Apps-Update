@@ -384,10 +384,24 @@ read_config() {
 get_schedule() {
   # Returns "min hour day month dow" from the cron entry, or the default.
   local entry
-  entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1)
+  entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1 || true)
   [ -n "$entry" ] || { echo "0 0 * * 0"; return 0; }
   echo "$entry" | awk '{print $1,$2,$3,$4,$5}'
 }
+legacy_config_value() {
+  local key=$1
+  awk -F= -v key="$key" '
+    $1 == key {
+      value=$0
+      sub(/^[^=]*=/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$OLD_CONFIG_FILE"
+}
+
+
 
 # ── Migration from previous installation ─────────────────────────────────────
 migrate_legacy_config() {
@@ -397,15 +411,15 @@ migrate_legacy_config() {
   [ -f "$OLD_CONFIG_FILE" ] || return 0
 
   local old_ct old_storage old_backup old_notify old_dry
-  old_ct=$(grep -E '^CONTAINER_IDS=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  old_storage=$(grep -E '^BACKUP_STORAGE=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  old_backup=$(grep -E '^BACKUP=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  old_notify=$(grep -E '^NOTIFY=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  old_dry=$(grep -E '^DRY_RUN=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  AUTO_REBOOT=$(grep -E '^AUTO_REBOOT=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  UPSTREAM_REFRESH=$(grep -E '^UPSTREAM_REFRESH=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  ALLOW_CACHED_UPSTREAM=$(grep -E '^ALLOW_CACHED_UPSTREAM=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
-  HEALTHCHECK_URL=$(grep -E '^HEALTHCHECK_URL=' "$OLD_CONFIG_FILE" | head -1 | cut -d= -f2- | tr -d '"')
+  old_ct=$(legacy_config_value CONTAINER_IDS)
+  old_storage=$(legacy_config_value BACKUP_STORAGE)
+  old_backup=$(legacy_config_value BACKUP)
+  old_notify=$(legacy_config_value NOTIFY)
+  old_dry=$(legacy_config_value DRY_RUN)
+  AUTO_REBOOT=$(legacy_config_value AUTO_REBOOT)
+  UPSTREAM_REFRESH=$(legacy_config_value UPSTREAM_REFRESH)
+  ALLOW_CACHED_UPSTREAM=$(legacy_config_value ALLOW_CACHED_UPSTREAM)
+  HEALTHCHECK_URL=$(legacy_config_value HEALTHCHECK_URL)
   [ -z "$old_ct" ] && return 0
 
   msg_info "Migrating configuration from ${OLD_CONFIG_FILE} to ${CONFIG_FILE}..."
@@ -417,7 +431,7 @@ migrate_legacy_config() {
 
   # Point any existing cron entry at the worker, preserving the schedule.
   local entry old_sched
-  entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1)
+  entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1 || true)
   if [ -n "$entry" ]; then
     old_sched=$(echo "$entry" | awk '{print $1,$2,$3,$4,$5}')
     remove_cron || true
@@ -726,7 +740,7 @@ show_status() {
 
   if crontab -l -u root 2>/dev/null | grep -qE "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}"; then
     local entry cron_fields schedule_desc
-    entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1)
+    entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1 || true)
     cron_fields=$(echo "$entry" | awk '{print $1,$2,$3,$4,$5}')
     schedule_desc=$(cron_to_human "$cron_fields" 2>/dev/null || echo "$cron_fields")
     msg_ok "Cron active: ${schedule_desc}"
@@ -821,7 +835,7 @@ get_cron_args() {
   # Returns container IDs and backup storage from the cron entry.
   # Splits on double quotes: cron line has "...script.sh" "101,102" "storage" ...
   local entry
-  entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1)
+  entry=$(crontab -l -u root 2>/dev/null | grep -E "${LOCAL_SCRIPT}|${WRAPPER_SCRIPT}" | head -1 || true)
   if [ -z "$entry" ]; then
     return 1
   fi
