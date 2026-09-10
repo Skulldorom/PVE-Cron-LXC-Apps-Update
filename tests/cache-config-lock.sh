@@ -227,4 +227,44 @@ grep -q 'Worker installed: yes' "$TMPDIR/o17" || { echo "FAIL: status missing wo
 grep -q 'Last completed run:' "$TMPDIR/o17" || { echo "FAIL: status missing last completed run"; exit 1; }
 echo "ok - status mode reports operational overview"
 
+# ── Maintenance-mode validation (mode-aware config handling) ──────────────────
+rm -f "$CONFIG_FILE"
+set +e; run_worker --status >"$TMPDIR/status-noconfig" 2>&1; code=$?; set -e
+[ "$code" -eq 0 ] || { echo "FAIL: --status with no config exited $code"; cat "$TMPDIR/status-noconfig"; exit 1; }
+grep -q 'Worker installed: yes' "$TMPDIR/status-noconfig" || { echo "FAIL: status-no-config missing overview"; cat "$TMPDIR/status-noconfig"; exit 1; }
+grep -q 'Configuration:' "$TMPDIR/status-noconfig" || { echo "FAIL: status-no-config missing config section"; exit 1; }
+echo "ok - --status works with no config file"
+
+printf 'CONTAINERS=101\nBACKUP=yes\nBACKUP_STORAGE=\n' >"$CONFIG_FILE"
+set +e; run_worker --status >"$TMPDIR/status-badbackup" 2>&1; code=$?; set -e
+[ "$code" -eq 0 ] || { echo "FAIL: --status with invalid backup config exited $code"; cat "$TMPDIR/status-badbackup"; exit 1; }
+grep -q 'Status: incomplete or invalid' "$TMPDIR/status-badbackup" || { echo "FAIL: status did not flag invalid backup config"; cat "$TMPDIR/status-badbackup"; exit 1; }
+grep -q 'Backup storage is required when BACKUP=yes' "$TMPDIR/status-badbackup" || { echo "FAIL: status missing backup warning"; exit 1; }
+echo "ok - --status surfaces incomplete backup config instead of failing"
+
+printf 'CONTAINERS=101\nBACKUP=maybe\n' >"$CONFIG_FILE"
+set +e; run_worker --status >"$TMPDIR/status-badbool" 2>&1; code=$?; set -e
+[ "$code" -eq 0 ] || { echo "FAIL: --status with invalid boolean exited $code"; cat "$TMPDIR/status-badbool"; exit 1; }
+grep -q 'Invalid BACKUP value' "$TMPDIR/status-badbool" || { echo "FAIL: status did not flag invalid boolean"; cat "$TMPDIR/status-badbool"; exit 1; }
+echo "ok - --status reports invalid boolean config without failing"
+
+printf 'CONTAINERS=101\nnot a valid config line\n' >"$CONFIG_FILE"
+set +e; run_worker --status >"$TMPDIR/status-malformed" 2>&1; code=$?; set -e
+[ "$code" -eq 0 ] || { echo "FAIL: --status with malformed config exited $code"; cat "$TMPDIR/status-malformed"; exit 1; }
+grep -q 'Malformed config line' "$TMPDIR/status-malformed" || { echo "FAIL: status did not report malformed config"; cat "$TMPDIR/status-malformed"; exit 1; }
+echo "ok - --status reports malformed config without becoming inaccessible"
+
+rm -f "$CONFIG_FILE" "$CACHE_DIR/update-apps.sh" "$CACHE_DIR/update-apps.meta"
+CURL_MODE=b run_worker --refresh-upstream-cache >"$TMPDIR/refresh-noconfig" 2>&1
+[ -f "$CACHE_DIR/update-apps.sh" ] || { echo "FAIL: refresh with no config did not cache upstream"; cat "$TMPDIR/refresh-noconfig"; exit 1; }
+grep -q 'Update B started' "$CACHE_DIR/update-apps.sh" || { echo "FAIL: refresh-no-config cached wrong content"; exit 1; }
+grep -q '^sha256=' "$CACHE_DIR/update-apps.meta" || { echo "FAIL: refresh-no-config missing metadata"; exit 1; }
+echo "ok - --refresh-upstream-cache works with no normal update config"
+
+printf 'CONTAINERS=101\nBACKUP=yes\nBACKUP_STORAGE=\n' >"$CONFIG_FILE"
+CURL_MODE=b run_worker --refresh-upstream-cache >"$TMPDIR/refresh-incomplete" 2>&1
+[ -f "$CACHE_DIR/update-apps.sh" ] || { echo "FAIL: refresh with incomplete config failed"; cat "$TMPDIR/refresh-incomplete"; exit 1; }
+grep -q 'Update B started' "$CACHE_DIR/update-apps.sh" || { echo "FAIL: refresh-incomplete cached wrong content"; exit 1; }
+echo "ok - --refresh-upstream-cache ignores irrelevant incomplete config"
+
 echo "ALL CACHE/CONFIG/LOCK TESTS PASSED"

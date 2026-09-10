@@ -39,6 +39,8 @@ CLI_HAS_CONTAINERS=no
 CLI_CONTAINERS=""
 CLI_BACKUP_STORAGE=""
 CLI_BACKUP_STORAGE_SET=no
+CONFIG_LOAD_ERROR=""
+CONFIG_WARNINGS=()
 
 normalize_bool() {
   case "${1:-}" in
@@ -62,15 +64,14 @@ load_config() {
     line="${line%%#*}"
     line=$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
     [ -z "$line" ] && continue
-    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || { echo "[ERROR] Malformed config line: $line" >&2; return 2; }
+    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || { CONFIG_LOAD_ERROR="Malformed config line: $line"; echo "[ERROR] $CONFIG_LOAD_ERROR" >&2; return 2; }
     key="${line%%=*}"
     value="${line#*=}"
     value=$(echo "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^"//; s/"$//')
     case "$key" in
       CONTAINERS|CONTAINER_IDS) CONTAINERS=$(normalize_container_list "$value") ;;
       BACKUP|NOTIFY|AUTO_REBOOT|UPSTREAM_REFRESH|ALLOW_CACHED_UPSTREAM|DRY_RUN)
-        bool=$(normalize_bool "$value") || { echo "[ERROR] Invalid boolean for $key" >&2; return 2; }
-        printf -v "$key" '%s' "$bool"
+        printf -v "$key" '%s' "$value"
         ;;
       BACKUP_STORAGE) BACKUP_STORAGE="$value" ;;
       HEALTHCHECK_URL) HEALTHCHECK_URL="$value" ;;
@@ -95,7 +96,11 @@ case "${1:-}" in
     ;;
 esac
 
-load_config || exit $?
+load_config_status=0
+load_config || load_config_status=$?
+if [ "$load_config_status" -ne 0 ] && [ "$STATUS_ONLY" != yes ]; then
+  exit "$load_config_status"
+fi
 # Effective precedence: built-in defaults < environment/default variables < config < explicit CLI arguments.
 if [ "$CLI_HAS_CONTAINERS" = yes ]; then
   CONTAINERS="$CLI_CONTAINERS"
@@ -141,25 +146,52 @@ mkdir -p "$LOG_DIR" 2>/dev/null || true
 # comma-separated lists. Normalize both forms before passing them upstream.
 CONTAINERS=$(echo "$CONTAINERS" | tr '[:space:]' ',' | sed -E 's/,+/,/g; s/^,//; s/,$//')
 
-if [ "${STATUS_ONLY:-no}" != yes ] && [ "${REFRESH_ONLY:-no}" != yes ]; then
+add_config_warning() { CONFIG_WARNINGS+=("$1"); }
+
+# Validate according to execution mode. Status is diagnostic: broken config is
+# reported in its output instead of aborting the command. Cache refresh only
+# checks what it actually needs. Normal and dry-run updates stay strict.
+if [ "$STATUS_ONLY" = yes ]; then
+  [ "$load_config_status" -eq 0 ] || add_config_warning "$CONFIG_LOAD_ERROR"
+  if [ -n "$CONTAINERS" ] && [[ ! "$CONTAINERS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    add_config_warning "Container IDs must be a comma-separated list of numeric IDs: $CONTAINERS"
+  fi
+  backup_status=$(normalize_bool "$BACKUP") || backup_status=invalid
+  notify_status=$(normalize_bool "$NOTIFY") || notify_status=invalid
+  auto_reboot_status=$(normalize_bool "$AUTO_REBOOT") || auto_reboot_status=invalid
+  upstream_refresh_status_config=$(normalize_bool "$UPSTREAM_REFRESH") || upstream_refresh_status_config=invalid
+  allow_cached_status=$(normalize_bool "$ALLOW_CACHED_UPSTREAM") || allow_cached_status=invalid
+  dry_run_status=$(normalize_bool "$DRY_RUN") || dry_run_status=invalid
+  [ "$backup_status" != invalid ] || add_config_warning "Invalid BACKUP value"
+  [ "$notify_status" != invalid ] || add_config_warning "Invalid NOTIFY value"
+  [ "$auto_reboot_status" != invalid ] || add_config_warning "Invalid AUTO_REBOOT value"
+  [ "$upstream_refresh_status_config" != invalid ] || add_config_warning "Invalid UPSTREAM_REFRESH value"
+  [ "$allow_cached_status" != invalid ] || add_config_warning "Invalid ALLOW_CACHED_UPSTREAM value"
+  [ "$dry_run_status" != invalid ] || add_config_warning "Invalid DRY_RUN value"
+  if [ "$backup_status" = yes ] && { [ -z "$BACKUP_STORAGE" ] || ! valid_storage "$BACKUP_STORAGE"; }; then
+    add_config_warning "Backup storage is required when BACKUP=yes"
+  fi
+  valid_url_or_empty "$HEALTHCHECK_URL" || add_config_warning "Invalid HEALTHCHECK_URL"
+elif [ "$REFRESH_ONLY" = yes ]; then
+  # Only the settings used to download/validate the upstream script matter here.
+  [[ "$UPSTREAM_SCRIPT_URL" =~ ^https?://[^[:space:]]+$ ]] || { echo "[ERROR] Invalid upstream script URL" >&2; exit 2; }
+else
   if [[ ! "$CONTAINERS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
     echo "[ERROR] Container IDs must be a comma-separated list of numeric IDs: $CONTAINERS" >&2
     exit 2
   fi
+  BACKUP=$(normalize_bool "$BACKUP") || { echo "[ERROR] Invalid BACKUP value" >&2; exit 2; }
+  NOTIFY=$(normalize_bool "$NOTIFY") || { echo "[ERROR] Invalid NOTIFY value" >&2; exit 2; }
+  AUTO_REBOOT=$(normalize_bool "$AUTO_REBOOT") || { echo "[ERROR] Invalid AUTO_REBOOT value" >&2; exit 2; }
+  UPSTREAM_REFRESH=$(normalize_bool "$UPSTREAM_REFRESH") || { echo "[ERROR] Invalid UPSTREAM_REFRESH value" >&2; exit 2; }
+  ALLOW_CACHED_UPSTREAM=$(normalize_bool "$ALLOW_CACHED_UPSTREAM") || { echo "[ERROR] Invalid ALLOW_CACHED_UPSTREAM value" >&2; exit 2; }
+  DRY_RUN=$(normalize_bool "$DRY_RUN") || { echo "[ERROR] Invalid DRY_RUN value" >&2; exit 2; }
+  if [ "$BACKUP" = "yes" ] && { [ -z "$BACKUP_STORAGE" ] || ! valid_storage "$BACKUP_STORAGE"; }; then
+    echo "[ERROR] Backup storage is required when BACKUP=yes" >&2
+    exit 2
+  fi
+  valid_url_or_empty "$HEALTHCHECK_URL" || { echo "[ERROR] Invalid HEALTHCHECK_URL" >&2; exit 2; }
 fi
-
-# Validate configuration after all sources (args/env/config) are merged.
-BACKUP=$(normalize_bool "$BACKUP") || { echo "[ERROR] Invalid BACKUP value" >&2; exit 2; }
-NOTIFY=$(normalize_bool "$NOTIFY") || { echo "[ERROR] Invalid NOTIFY value" >&2; exit 2; }
-AUTO_REBOOT=$(normalize_bool "$AUTO_REBOOT") || { echo "[ERROR] Invalid AUTO_REBOOT value" >&2; exit 2; }
-UPSTREAM_REFRESH=$(normalize_bool "$UPSTREAM_REFRESH") || { echo "[ERROR] Invalid UPSTREAM_REFRESH value" >&2; exit 2; }
-ALLOW_CACHED_UPSTREAM=$(normalize_bool "$ALLOW_CACHED_UPSTREAM") || { echo "[ERROR] Invalid ALLOW_CACHED_UPSTREAM value" >&2; exit 2; }
-DRY_RUN=$(normalize_bool "$DRY_RUN") || { echo "[ERROR] Invalid DRY_RUN value" >&2; exit 2; }
-if [ "$BACKUP" = "yes" ] && { [ -z "$BACKUP_STORAGE" ] || ! valid_storage "$BACKUP_STORAGE"; }; then
-  echo "[ERROR] Backup storage is required when BACKUP=yes" >&2
-  exit 2
-fi
-valid_url_or_empty "$HEALTHCHECK_URL" || { echo "[ERROR] Invalid HEALTHCHECK_URL" >&2; exit 2; }
 
 env_args=(
   var_container="$CONTAINERS"
@@ -290,9 +322,18 @@ if [ "${STATUS_ONLY:-no}" = yes ]; then
   echo "Worker installed: yes"
   echo "Worker SHA256: $(sha_file "$0")"
   echo "Configured containers: ${CONTAINERS:-not configured}"
-  echo "Backup: ${BACKUP:-yes}"
+  echo "Backup: ${backup_status:-$BACKUP}"
   echo "Backup storage: ${BACKUP_STORAGE:-not configured}"
-  echo "Notifications: ${NOTIFY:-yes}"
+  echo "Notifications: ${notify_status:-$NOTIFY}"
+  echo "Configuration:"
+  if [ "${#CONFIG_WARNINGS[@]}" -eq 0 ]; then
+    echo "  Status: ok"
+  else
+    echo "  Status: incomplete or invalid"
+    for warning in "${CONFIG_WARNINGS[@]}"; do
+      echo "  Warning: $warning"
+    done
+  fi
   echo "Upstream cache:"
   echo "  Present: $([ -f "$CACHE_FILE" ] && echo yes || echo no)"
   echo "  Source: $(grep -E '^source_url=' "$CACHE_META" 2>/dev/null | cut -d= -f2- || echo "$UPSTREAM_SCRIPT_URL")"
