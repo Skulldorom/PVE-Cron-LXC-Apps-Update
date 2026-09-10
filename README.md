@@ -2,11 +2,64 @@
 
 > **Disclaimer:** This project is NOT affiliated with, endorsed by, or connected to [community-scripts](https://community-scripts.org) / Proxmox VE Helper Scripts. It is an independent wrapper that automates their `update-apps.sh` tool.
 
-PVE-Cron-LXC-Apps-Update automates unattended updates for community-scripts-managed LXC containers on Proxmox VE. It runs update-apps.sh, backs up containers first, and posts a clean summary notification.
+PVE-Cron-LXC-Apps-Update automates unattended **application-level** updates for community-scripts-managed LXC containers on Proxmox VE. It runs upstream `update-apps.sh`, backs up containers first, and posts a clean summary notification.
 
 <p align="center">
   <a href="https://ko-fi.com/skulldorom"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
 </p>
+
+## What this project does
+
+Runs [community-scripts `update-apps.sh`](https://community-scripts.org/docs/tools/pve/update-apps) against an explicitly selected allow-list of LXC containers, optionally backing them up first, then produces useful logging, status and notifications.
+
+## What it does NOT do
+
+This project is **not** a general LXC OS/package updater. It does **not** run `apt dist-upgrade`, `apk upgrade`, `dnf update`, `pacman -Syu`, `zypper dup`, or any equivalent OS-update functionality. It does **not** automatically update every LXC.
+
+It is intentionally different from Community Scripts' `cron-update-lxcs.sh` / `update-lxcs-cron.sh` (the OS updater). Only the **architectural lessons** are borrowed: a separate installer/manager, a persistent config, a stable local worker, and a last-known-good cache for the upstream script.
+
+## Architecture
+
+```text
+cron
+ |
+ v
+update-community-apps.sh   (stable local worker)
+ |
+ +--> config  /etc/update-community-apps.conf
+ |
+ +--> lock  (flock)
+ |
+ +--> refresh update-apps.sh cache
+ |       |
+ |       +--> failure -> last-known-good cache
+ |
+ +--> backup  (vzdump, when enabled)
+ |
+ +--> update-apps.sh  (cached upstream)
+ |
+ +--> logs/status
+ |
+ +--> Proxmox notification
+ |
+ +--> optional Healthchecks
+```
+
+```text
+Management / Installer  (install.sh)
+        |
+        v
+Persistent configuration  (/etc/update-community-apps.conf)
+        |
+        v
+Stable local worker  (/usr/local/bin/update-community-apps.sh)
+        |
+        v
+Cached/validated upstream update-apps.sh  (/usr/local/lib/update-community-apps/update-apps.sh)
+        |
+        v
+Community Scripts application updates
+```
 
 ## Quick Start
 
@@ -18,41 +71,97 @@ This launches an interactive whiptail menu that:
 1. Scans your Proxmox node for community-script LXC containers
 2. Walks you through frequency (daily/weekly/monthly), hour, notifications, backups, and dry-run options
 3. If backups are enabled, detects backup-capable storage targets using the upstream `update-apps.sh` selection logic
-4. Installs `update-community-apps.sh`, a cron wrapper script, and configures the crontab
+4. Installs `update-community-apps.sh`, writes the config, and configures the crontab to invoke the worker directly
 
-## What It Does
+## How it runs
 
-- Runs [community-scripts `update-apps.sh`](https://community-scripts.org/docs/tools/pve/update-apps) unattended with:
-  - `var_backup=yes|no` — snapshot with `vzdump` before updating (toggleable)
-  - `var_unattended=yes` — no interactive prompts inside containers
-  - `var_skip_confirm=yes` — skip initial confirmation
-  - `var_continue_on_error=yes` — continue to next CT if one fails
-  - `var_auto_reboot=yes` — reboot CT if app requires it
-- **Per-container error resilience** — one container failing does not abort the run; downstream processing (summary, notification, status file) always executes
-- **Bounded readable logs only** — produces a single timestamped `.log` per run from upstream's own `Full log:` file, capped at 10 MiB by default; raw terminal-noise output is held temporarily as a 1 MiB tail-only capture for fallback parsing
-- **Last-run status file** — writes `/var/log/update-community-apps-last-status` with exit code, timestamp, containers, and error count; the installer Status menu reads it for ✅/❌ display
-- Captures the summary table for quick review
-- Optionally sends the summary followed by the clean run log, with the ending summary removed, through Proxmox VE's default notification pipeline
-- Upstream's generated full log is copied into `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` without duplicating noisy spinner output into the stable cron log; oversized logs are truncated with a warning while preserving the beginning and final summary tail
+The scheduled command is simply the worker:
+
+```text
+0 4 * * 0 /usr/local/bin/update-community-apps.sh >>/var/log/update-community-apps-cron.log 2>&1
+```
+
+Runtime configuration comes from `/etc/update-community-apps.conf`, not from the cron line. Changing configuration (containers, backups, storage, notifications, schedule) never requires reinstalling the worker.
+
+## Configuration
+
+The config file is `/etc/update-community-apps.conf`:
+
+```
+CONTAINERS="101,102,105"
+BACKUP_STORAGE="local"
+BACKUP="yes"
+NOTIFY="yes"
+AUTO_REBOOT="yes"
+UPSTREAM_REFRESH="yes"
+ALLOW_CACHED_UPSTREAM="yes"
+DRY_RUN="no"
+HEALTHCHECK_URL=""
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `CONTAINERS` | — | Comma- or whitespace-separated allow-list of CT IDs |
+| `BACKUP_STORAGE` | — | Proxmox storage for pre-update `vzdump` backups (required when `BACKUP=yes`) |
+| `BACKUP` | `yes` | Snapshot/backup before updating |
+| `NOTIFY` | `yes` | Send Proxmox notification after the run |
+| `AUTO_REBOOT` | `yes` | Reboot CT if the app requires it |
+| `UPSTREAM_REFRESH` | `yes` | Attempt to refresh the upstream cache at run start |
+| `ALLOW_CACHED_UPSTREAM` | `yes` | Fall back to the cached upstream script when refresh fails |
+| `DRY_RUN` | `no` | Check-only mode |
+| `HEALTHCHECK_URL` | — | Optional Healthchecks.io/dead-man ping URL (disabled when empty) |
+
+The config is parsed with a **constrained key/value reader**, never shell `source`, so a config file cannot execute arbitrary commands. Validation rejects invalid container IDs, malformed booleans, and `BACKUP=yes` without a storage target.
+
+## Upstream cache & fallback
+
+The worker downloads upstream `update-apps.sh` to a **last-known-good** cache so a transient GitHub / `raw.githubusercontent.com` / CDN / DNS outage does not prevent scheduled maintenance.
+
+Cache location: `/usr/local/lib/update-community-apps/update-apps.sh` (plus `update-apps.meta` with source URL, SHA256, refresh timestamp).
+
+```text
+Attempt upstream refresh
+        |
+        +-- success --> validate --> atomically replace cache --> execute cache
+        |
+        +-- failure --> valid cached copy exists?
+                            |
+                            +-- yes --> warn + execute cached copy
+                            |
+                            +-- no --> fail safely + notify
+```
+
+- Downloads go to a temporary file first, then are validated (non-empty, shebang, `bash -n`, not HTML) before atomic replacement.
+- A failed/empty/partial download **never** replaces a known-good cache.
+- SHA256, source URL and refresh timestamp are recorded in the cache metadata.
+- The log clearly states whether the run used fresh or cached upstream code, and warns on fallback.
+- If neither a fresh download nor a valid cache is available, the run aborts safely and notifies.
+
+### Manual cache refresh
+
+```bash
+/usr/local/bin/update-community-apps.sh --refresh-upstream-cache
+```
+
+Prints the cache path and SHA256 on success, leaves the existing cache untouched on failure.
 
 ## Manual Usage
 
 ```bash
-# Normal update — backup then update
-/usr/local/bin/update-community-apps.sh "101,102,105,109,111" "HDD-Storage"
+# Normal update — reads config
+/usr/local/bin/update-community-apps.sh
 
 # Dry-run — check what's available without applying
-/usr/local/bin/update-community-apps.sh "101,102,105,109,111" "HDD-Storage" dry-run
+/usr/local/bin/update-community-apps.sh --dry-run
 
-# Run without backups — no storage selection needed
-BACKUP=no /usr/local/bin/update-community-apps.sh "101,102,105,109,111"
+# Status overview
+/usr/local/bin/update-community-apps.sh --status
+
+# Override containers/storage inline (legacy positional form)
+/usr/local/bin/update-community-apps.sh "101,102,105" "HDD-Storage" dry-run
 ```
 
-| Arg | Required | Description |
-|-----|----------|-------------|
-| `container_ids` | ✅ | Comma-separated list of CT IDs to update |
-| `backup_storage` | Required when `BACKUP=yes` | Proxmox storage name for pre-update backups |
-| `dry-run` | ❌ | Pass `dry-run` as 3rd arg to check only |
+The legacy positional arguments (`container_ids`, `backup_storage`, `dry-run`) remain supported. Without arguments the worker reads the config file.
 
 ### Environment Variables
 
@@ -62,29 +171,93 @@ BACKUP=no /usr/local/bin/update-community-apps.sh "101,102,105,109,111"
 | `BACKUP` | `yes` | Set to `no` to skip pre-update vzdump backups |
 | `MAX_WORKER_LOG_BYTES` | `10485760` | Maximum bytes for each persisted timestamped worker log |
 | `MAX_UPSTREAM_CAPTURE_BYTES` | `1048576` | Maximum bytes retained from upstream terminal output while looking for the `Full log:` pointer |
-| `UPDATE_COMMUNITY_APPS_LOG_DIR` | `/var/log` | Directory for timestamped worker logs; mainly useful for tests |
-| `UPDATE_COMMUNITY_APPS_STATUS_FILE` | `$UPDATE_COMMUNITY_APPS_LOG_DIR/update-community-apps-last-status` | Last-run status file path; mainly useful for tests |
-| `UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR` | `/usr/local/community-scripts/update_apps` | Directory where upstream `update-apps.sh` writes its full logs |
-| `UPDATE_COMMUNITY_APPS_UPSTREAM_SCRIPT_URL` | community-scripts raw GitHub URL | Upstream script URL; mainly useful for tests |
+| `UPDATE_COMMUNITY_APPS_CONFIG_FILE` | `/etc/update-community-apps.conf` | Config file path |
+| `UPDATE_COMMUNITY_APPS_LOG_DIR` | `/var/log` | Directory for timestamped worker logs |
+| `UPDATE_COMMUNITY_APPS_STATUS_FILE` | `$UPDATE_COMMUNITY_APPS_LOG_DIR/update-community-apps-last-status` | Last-run status file |
+| `UPDATE_COMMUNITY_APPS_UPSTREAM_LOG_DIR` | `/usr/local/community-scripts/update_apps` | Upstream `update-apps.sh` full-log directory |
+| `UPDATE_COMMUNITY_APPS_UPSTREAM_SCRIPT_URL` | community-scripts raw GitHub URL | Upstream script URL |
+| `UPDATE_COMMUNITY_APPS_CACHE_DIR` | `/usr/local/lib/update-community-apps` | Upstream cache directory |
+| `UPDATE_COMMUNITY_APPS_LOCK_FILE` | `/run/update-community-apps.lock` | Concurrency lock file |
 
-## Configuration
+## Status
 
-The installer creates a config file at `/etc/update-community-apps/config` with all settings:
+`--status` (and the installer's Status menu) reports an operational overview:
 
+```text
+Worker installed: yes
+Worker SHA256: ...
+Configured containers: ...
+Backup: enabled
+Backup storage: ...
+Notifications: enabled
+
+Upstream cache:
+  Present: yes
+  Source: ...
+  SHA256: ...
+  Last refreshed: ...
+  Age: ...
+
+Last run:
+  Timestamp: ...
+  Exit code: ...
+  Used upstream: fresh/cached
+  Log: ...
 ```
-CONTAINER_IDS="101,102,105"
-BACKUP_STORAGE="local"
-BACKUP="yes"
-SCHEDULE="0 5 * * 0"
-NOTIFY="yes"
-DRY_RUN="no"
+
+## Backups
+
+When `BACKUP=yes`, each selected container is snapshotted with `vzdump` before `update-apps.sh` runs. `BACKUP=yes` without a `BACKUP_STORAGE` is rejected at config-validation time. Backup semantics are unchanged from upstream application-update behaviour.
+
+## Notifications
+
+When `NOTIFY=yes`, the worker sends the sanitized summary followed by the clean run log (ending summary removed) through Proxmox VE's default notification pipeline. The worker creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if missing.
+
+## Healthchecks (optional)
+
+Set `HEALTHCHECK_URL` to your Healthchecks.io (or compatible) ping URL to enable dead-man monitoring. When configured, the worker sends `/start` at run begin, then reports success or `/fail` at the end (with the log attached on failure). Healthchecks is supplementary to native Proxmox notifications — a Healthchecks network failure never breaks the updater, retries are bounded, and the URL is never echoed into logs.
+
+## Logging
+
+Each run produces one timestamped `.log`, capped at `MAX_WORKER_LOG_BYTES` (10 MiB default). Key lifecycle events are recorded explicitly:
+
+```text
+Updater started
+Configuration loaded
+Lock acquired
+Refreshing upstream cache
+Upstream refresh successful
+Upstream SHA256: ...
+Using freshly downloaded upstream
 ```
 
-A thin wrapper script at `/usr/local/bin/update-community-apps-wrapper.sh` sources this config and calls the worker. The crontab entry invokes the wrapper, keeping the cron line compact and editable via the **Edit Config** menu.
+or, on fallback:
 
-### Edit Config
+```text
+WARNING: upstream refresh failed
+Using last-known-good cached update-apps.sh
+Cached SHA256: ...
+Cached age: ...
+```
 
-The installer's **Edit Config** menu shows each current value and lets you keep it or change only that setting — no reinstall, no remembering your old LXC IDs, no ritual sacrifice to the cron gods. When backups are enabled, storage is selected immediately after the backup prompt; when backups are disabled, storage is skipped. It rewrites the config file, wrapper script, and crontab entry atomically.
+and finally:
+
+```text
+Updater completed
+Result: success / partial failure / failure
+```
+
+## Concurrency
+
+A `flock` on `/run/update-community-apps.lock` prevents overlapping runs. A second invocation while one is running detects the existing run, logs the reason, and exits cleanly without running simultaneous backups/updates or corrupting cache/status/log state.
+
+## Updating the worker
+
+The installer's **Update** menu checks the latest `update-community-apps.sh` from GitHub, computes current and candidate SHA256, shows a diff when running interactively, requires confirmation before replacing local code, and installs atomically. The working config and cron schedule are preserved. Worker updates and application updates are separate concepts — the scheduled run does **not** silently self-update the worker.
+
+## Uninstall
+
+The **Remove** menu removes only project-owned artifacts: the local worker, the legacy wrapper shim, the cron entry, the upstream cache, and the last-run status file. Configuration is preserved by default (you are asked before deleting it). Log files are kept. Community Scripts files and LXC software are never touched.
 
 ## Requirements
 
@@ -94,80 +267,63 @@ The installer's **Edit Config** menu shows each current value and lets you keep 
 - Storage target(s) configured in Proxmox with `backup` content type enabled
 - The installer lists storage targets using the same backup-capable storage detection as the upstream `update-apps.sh` tool
 
-## Recommendations
-
-- **Proxmox notifications** — configure notification targets and matchers in Proxmox VE (`Datacenter` → `Notifications`). When enabled, this updater sends the summary at the top of the notification, followed by a sanitized run log with terminal redraws, banners, scan progress spam, and the ending summary removed, through the default Proxmox notification pipeline instead of posting to a custom webhook URL. The updater creates the required `simple` notification templates in `/etc/pve/notification-templates/default/` if they are missing, so webhook targets can render the summary payload.
-- **[proxmox-discord-notifier](https://github.com/Skulldorom/proxmox-discord-notifier)** — companion service that receives the JSON webhook payload and delivers it to Discord. Provides rich embed formatting for update summaries. Install it on your homelab and point `NOTIFIER_URL` at its `/api/notify` endpoint.
-- **Log monitoring** — check `/var/log/update-community-apps-*.log` for readable run output based on upstream's own `Full log:` file. If upstream exits before printing that pointer, the wrapper falls back to the newest upstream log in `/usr/local/community-scripts/update_apps` created during the run. Raw terminal-noise output is not kept as a separate timestamped log and is not duplicated into `/var/log/update-community-apps-cron.log`. Notification delivery successes and failures are appended to the timestamped worker log; failures also print a warning to cron stderr.
-
 ## Files
 
 | Path | Purpose |
 |------|---------|
-| `/usr/local/bin/update-community-apps.sh` | The worker script (installed by `install.sh`) |
-| `/usr/local/bin/update-community-apps-wrapper.sh` | Cron wrapper — sources config, calls worker |
-| `/etc/update-community-apps/config` | Configuration file (source-able key=value pairs) |
-| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run worker log copied from upstream's `Full log:` output, capped at 10 MiB by default |
+| `/usr/local/bin/update-community-apps.sh` | Stable local worker |
+| `/etc/update-community-apps.conf` | Persistent configuration |
+| `/usr/local/lib/update-community-apps/update-apps.sh` | Cached/validated upstream worker |
+| `/usr/local/lib/update-community-apps/update-apps.meta` | Cache metadata (SHA256, source, timestamp) |
+| `/var/log/update-community-apps-YYYYMMDD_HHMMSS.log` | Per-run worker log |
 | `/var/log/update-community-apps-cron.log` | Stable cron stdout/stderr log |
-| `/var/log/update-community-apps-last-status` | Last-run status (exit code, timestamp, errors) |
+| `/var/log/update-community-apps-last-status` | Last-run status |
+| `/run/update-community-apps.lock` | Concurrency lock |
+| `/etc/logrotate.d/update-community-apps` | Log rotation config |
+
+A legacy wrapper at `/usr/local/bin/update-community-apps-wrapper.sh` is retained only as a compatibility shim for pre-existing cron entries; new installs point cron directly at the worker.
 
 ### Log Rotation
 
-Each run creates one timestamped worker log file. The worker caps each persisted run log at 10 MiB by default (`MAX_WORKER_LOG_BYTES=10485760`) and keeps only the last 1 MiB of temporary upstream terminal capture (`MAX_UPSTREAM_CAPTURE_BYTES=1048576`). Timestamped logs still accumulate because every run uses a unique path, so the included logrotate config removes worker logs older than 28 days and also rotates them early at 10 MiB. The cron stdout/stderr log is handled separately as `/var/log/update-community-apps-cron.log`, rotates daily, keeps 3 compressed rotations, and rotates early at 10 MB.
+The included logrotate config removes timestamped worker logs older than 28 days and rotates the cron log daily (3 compressed rotations, 10 MB max).
 
-To prevent unbounded accumulation, install the included logrotate config:
+## Migration
 
-```bash
-cp logrotate.conf /etc/logrotate.d/update-community-apps
-```
-
-Or download directly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Skulldorom/PVE-Cron-LXC-Apps-Update/main/logrotate.conf \
-  -o /etc/logrotate.d/update-community-apps
-```
-
-This removes timestamped worker logs older than 28 days, and keeps 3 compressed daily rotations of the stable cron log with a 10 MB max size. The installer also includes a **Logs** menu where you can change the timestamped worker log retention period, browse all current updater logs, or delete current updater logs.
+Existing installations are migrated automatically. The old `/etc/update-community-apps/config` (wrapper + `source` model) is converted to `/etc/update-community-apps.conf`, preserving selected containers, backup settings, backup storage, notification preference and schedule. The cron entry is updated to invoke the worker directly while keeping the existing schedule. If a setting cannot be determined confidently, the migration is conservative.
 
 ## Testing
-
-Run the local shell regression harness from the repository root:
 
 ```bash
 bash -n update-community-apps.sh install.sh tests/*.sh
 bash tests/run.sh
 bash tests/cron-path.sh
 bash tests/notification-noise.sh
+bash tests/cache-config-lock.sh
 ```
 
-The test fakes the upstream community-scripts updater and Proxmox notification module so it can validate the early-exit log fallback and notification diagnostics without a live Proxmox VE node.
+The tests fake the upstream updater, Proxmox notification module, and network boundaries, so they run without a live Proxmox VE node, GitHub, or Healthchecks service.
 
 ## Installer Menu Options
 
 | Option | Description |
 |--------|-------------|
 | **Install** | Discover containers & storage, configure schedule, install cron |
-| **Edit Config** | Keep current settings or change only containers, backups/storage, schedule, notifications, and dry-run without reinstalling |
-| **Dry Run** | Check for updates without applying (reads args from config or prompts) |
-| **Update** | Diff and pull latest `update-community-apps.sh` from GitHub |
-| **Remove** | Remove cron schedule, wrapper, config file, and local script |
-| **Status** | Show installed state, human-readable schedule, ✅/❌ last-run outcome |
-| **Run Now** | Manual trigger — runs script immediately |
-| **Logs** | Manage log retention, view update logs, and delete current update logs |
-| **View** | Display installed script, config file, and cron config |
+| **Edit Config** | Change containers, backups/storage, schedule, notifications, dry-run without reinstalling |
+| **Dry Run** | Check for updates without applying |
+| **Update** | Diff and pull latest worker from GitHub (atomic, confirmed) |
+| **Remove** | Remove cron, worker, cache, status (config preserved by default) |
+| **Status** | Installed state, schedule, last-run outcome, upstream cache |
+| **Run Now** | Manual trigger |
+| **Logs** | Manage retention, view/delete logs |
+| **View** | Display worker, config, cache, cron |
 
 ## Schedule Options
-
-The installer supports three schedule frequencies:
 
 | Frequency | Cron Expression | Example Display |
 |-----------|----------------|-----------------|
 | **Daily** | `0 H * * *` | "Daily at 05:00" |
 | **Weekly** | `0 H * * DOW` | "Weekly: Sunday at 05:00" |
 | **Monthly** | `0 H DAY * *` | "Monthly: day 15 at 05:00" |
-
-The Status menu parses the cron entry and displays a human-readable schedule description. The Edit Config menu lets you change the schedule at any time.
 
 ## License
 
