@@ -297,7 +297,9 @@ The included logrotate config removes timestamped worker logs older than 28 days
 
 ## Migration
 
-Existing installations are migrated automatically. The old `/etc/update-community-apps/config` (wrapper + `source` model) is converted to `/etc/update-community-apps.conf`, preserving selected containers, backup settings, backup storage, notification preference and schedule. The cron entry is updated to invoke the worker directly while keeping the existing schedule. If a setting cannot be determined confidently, the migration is conservative.
+Existing installations are migrated automatically. The old `/etc/update-community-apps/config` (wrapper + `source` model) is converted to `/etc/update-community-apps.conf`, preserving selected containers, backup settings, backup storage, notification preference and schedule. The cron entry is updated to invoke the worker directly while keeping the existing schedule.
+
+After migration, `/etc/update-community-apps.conf` is authoritative. The old `/etc/update-community-apps/config` may remain as a rollback/compatibility artifact, but it is **not** an active configuration source while the new config exists. Editing the legacy file after migration does not change updater behavior. Re-running migration is idempotent and does not duplicate cron entries or rewrite operator settings from the legacy artifact.
 
 ## Testing
 
@@ -307,6 +309,7 @@ bash tests/run.sh
 bash tests/cron-path.sh
 bash tests/notification-noise.sh
 bash tests/cache-config-lock.sh
+bash tests/migration.sh
 ```
 
 The tests fake the upstream updater, Proxmox notification module, and network boundaries, so they run without a live Proxmox VE node, GitHub, or Healthchecks service.

@@ -118,7 +118,7 @@ if [ "$(grep -c '^errors_count=' "$STATUS_FILE")" -ne 1 ]; then
   exit 1
 fi
 if grep -qx '0' "$STATUS_FILE"; then
-  echo "Status file contains a stray bare zero line" >&2
+
   cat "$STATUS_FILE" >&2
   exit 1
 fi
@@ -134,3 +134,6 @@ grep -q '^origin=update-community-apps$' "$NOTIFY_RECORD" || {
 }
 
 echo "ok - early upstream exit copies upstream log and records notification status"
+
+# Keep existing-install migration covered by the default test entry point.
+bash "$ROOT/tests/migration.sh"

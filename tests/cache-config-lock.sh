@@ -156,8 +156,17 @@ set +e; run_worker >"$TMPDIR/o11" 2>&1; code=$?; set -e
 [ "$code" -eq 0 ] || { echo "FAIL: expected clean exit 0 on lock contention, got $code"; exit 1; }
 grep -q 'already active' "$TMPDIR/o11" || { echo "FAIL: no lock contention message"; exit 1; }
 [ ! -s "$HC_LOG" ] || { echo "FAIL: lock contention emitted healthcheck"; cat "$HC_LOG"; exit 1; }
+! grep -q 'update:' "$EVENTS" || { echo "FAIL: lock contention executed upstream"; cat "$EVENTS"; exit 1; }
+grep -q '^last_invocation_result=skipped$' "$STATUS_FILE" || { echo "FAIL: skipped invocation not recorded"; cat "$STATUS_FILE"; exit 1; }
+grep -q '^last_invocation_reason=already_running$' "$STATUS_FILE" || { echo "FAIL: skipped reason not recorded"; cat "$STATUS_FILE"; exit 1; }
+grep -q '^exit_code=0$' "$STATUS_FILE" || { echo "FAIL: previous completed run exit code not retained"; cat "$STATUS_FILE"; exit 1; }
+grep -q '^upstream_used=' "$STATUS_FILE" || { echo "FAIL: previous completed run upstream detail not retained"; cat "$STATUS_FILE"; exit 1; }
+run_worker --status >"$TMPDIR/status-after-skip" 2>&1
+grep -q 'Last invocation:' "$TMPDIR/status-after-skip" || { echo "FAIL: status missing last invocation"; cat "$TMPDIR/status-after-skip"; exit 1; }
+grep -q 'already_running' "$TMPDIR/status-after-skip" || { echo "FAIL: status missing skip reason"; cat "$TMPDIR/status-after-skip"; exit 1; }
+grep -q 'Last completed run:' "$TMPDIR/status-after-skip" || { echo "FAIL: status missing last completed run"; cat "$TMPDIR/status-after-skip"; exit 1; }
 flock -u 7
-echo "ok - concurrency lock prevents overlap and no healthcheck run is emitted"
+echo "ok - concurrency lock prevents overlap and records skipped invocation without losing completed run"
 
 reset_logs
 CURL_MODE=ok run_worker >"$TMPDIR/o12" 2>&1
@@ -215,7 +224,7 @@ rm -f "$STATUS_FILE"
 printf 'CONTAINERS=101\nBACKUP=no\n' >"$CONFIG_FILE"
 run_worker --status >"$TMPDIR/o17" 2>&1
 grep -q 'Worker installed: yes' "$TMPDIR/o17" || { echo "FAIL: status missing worker line"; exit 1; }
-grep -q 'Last run:' "$TMPDIR/o17" || { echo "FAIL: status missing last run"; exit 1; }
+grep -q 'Last completed run:' "$TMPDIR/o17" || { echo "FAIL: status missing last completed run"; exit 1; }
 echo "ok - status mode reports operational overview"
 
 echo "ALL CACHE/CONFIG/LOCK TESTS PASSED"

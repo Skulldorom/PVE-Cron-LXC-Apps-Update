@@ -11,7 +11,7 @@ mkdir -p "$FAKE_BIN" "$TMPDIR/etc/update-community-apps" "$TMPDIR/usr/local/bin"
 CRONTAB_FILE="$TMPDIR/root.cron"
 LOCAL_SCRIPT="$TMPDIR/usr/local/bin/update-community-apps.sh"
 WRAPPER_SCRIPT="$TMPDIR/usr/local/bin/update-community-apps-wrapper.sh"
-CONFIG_FILE="$TMPDIR/etc/update-community-apps.conf"
+CONFIG_FILE="$TMPDIR/new-config-dir/update-community-apps.conf"
 OLD_CONFIG_FILE="$TMPDIR/etc/update-community-apps/config"
 LOG_FILE="$TMPDIR/update-community-apps-cron.log"
 LOGROTATE_FILE="$TMPDIR/logrotate/update-community-apps"
@@ -77,6 +77,14 @@ grep -q "^17 3 \* \* 2 $LOCAL_SCRIPT >>$LOG_FILE 2>&1$" "$CRONTAB_FILE" || { ech
 ! grep -q "$WRAPPER_SCRIPT" "$CRONTAB_FILE" || { echo "FAIL: old wrapper still in cron"; cat "$CRONTAB_FILE"; exit 1; }
 first_config_hash=$(sha256sum "$CONFIG_FILE" | awk '{print $1}')
 first_cron_hash=$(sha256sum "$CRONTAB_FILE" | awk '{print $1}')
+cat >"$OLD_CONFIG_FILE" <<CFG
+CONTAINER_IDS="999"
+BACKUP_STORAGE="changed-storage"
+BACKUP="yes"
+NOTIFY="yes"
+DRY_RUN="no"
+CFG
+
 
 run_migrate
 second_config_hash=$(sha256sum "$CONFIG_FILE" | awk '{print $1}')

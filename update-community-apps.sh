@@ -262,6 +262,20 @@ healthcheck_ping() {
   fi
 }
 
+write_skipped_invocation_status() {
+  local tmp
+  tmp=$(mktemp "${STATUS_FILE}.tmp.XXXXXX") || return 0
+  if [ -f "$STATUS_FILE" ]; then
+    grep -Ev '^(last_invocation_result|last_invocation_reason|last_invocation_timestamp)=' "$STATUS_FILE" >"$tmp" 2>/dev/null || true
+  fi
+  {
+    echo "last_invocation_result=skipped"
+    echo "last_invocation_reason=already_running"
+    echo "last_invocation_timestamp=${TIMESTAMP}"
+  } >>"$tmp"
+  mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f "$tmp"
+}
+
 if [ "$REFRESH_ONLY" = yes ]; then
   if refresh_upstream_cache; then
     echo "Upstream cache refreshed: $CACHE_FILE"
@@ -285,7 +299,11 @@ if [ "${STATUS_ONLY:-no}" = yes ]; then
   echo "  SHA256: $([ -f "$CACHE_FILE" ] && sha_file "$CACHE_FILE" || echo unknown)"
   echo "  Last refreshed: $(grep -E '^refreshed_at=' "$CACHE_META" 2>/dev/null | cut -d= -f2- || echo unknown)"
   echo "  Age: $(cache_age_seconds 2>/dev/null || echo unknown)"
-  echo "Last run:"
+  echo "Last invocation:"
+  echo "  Result: $(grep -E '^last_invocation_result=' "$STATUS_FILE" 2>/dev/null | cut -d= -f2- || echo none)"
+  echo "  Reason: $(grep -E '^last_invocation_reason=' "$STATUS_FILE" 2>/dev/null | cut -d= -f2- || echo none)"
+  echo "  Timestamp: $(grep -E '^last_invocation_timestamp=' "$STATUS_FILE" 2>/dev/null | cut -d= -f2- || echo none)"
+  echo "Last completed run:"
   echo "  Timestamp: $(grep -E '^timestamp=' "$STATUS_FILE" 2>/dev/null | cut -d= -f2- || echo none)"
   echo "  Exit code: $(grep -E '^exit_code=' "$STATUS_FILE" 2>/dev/null | cut -d= -f2- || echo none)"
   echo "  Used upstream: $(grep -E '^upstream_used=' "$STATUS_FILE" 2>/dev/null | cut -d= -f2- || echo none)"
@@ -297,6 +315,7 @@ fi
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "[WARN] Another update-community-apps run is already active; exiting."
+  write_skipped_invocation_status
   exit 0
 fi
 healthcheck_ping "/start"
@@ -526,6 +545,9 @@ ERROR_COUNT=$(grep -c 'exit code [1-9]' "$LOG_FOR_PARSE" 2>/dev/null || true)
 ERROR_COUNT=${ERROR_COUNT:-0}
 
 {
+  echo "last_invocation_result=completed"
+  echo "last_invocation_reason=none"
+  echo "last_invocation_timestamp=${TIMESTAMP}"
   echo "exit_code=${EXIT_CODE}"
   echo "timestamp=${TIMESTAMP}"
   echo "node=${NODE_NAME}"

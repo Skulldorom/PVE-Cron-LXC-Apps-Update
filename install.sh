@@ -315,7 +315,9 @@ write_config() {
   min="${1:-0}" hour="${2:-0}" day="${3:-*}" month="${4:-*}" dow="${5:-0}"
   local ct_ids="${6}" storage="${7}" notify="${8:-yes}" backup="${9:-yes}" dry="${10:-no}"
 
-  local tmp
+  local tmp config_dir
+  config_dir=$(dirname "$CONFIG_FILE")
+  mkdir -p "$config_dir" || { msg_error "Failed to create config directory: $config_dir"; return 1; }
   tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX") || return 1
 
   cat > "$tmp" <<CFGEOF
@@ -752,17 +754,25 @@ show_status() {
   # ── Last run status (I3 integration) ─────────────────────────────────────
   local status_file="/var/log/update-community-apps-last-status"
   if [ -f "$status_file" ]; then
-    local exit_code timestamp containers errors
+    local exit_code timestamp containers errors invocation_result invocation_reason invocation_timestamp
+    invocation_result=$(grep '^last_invocation_result=' "$status_file" 2>/dev/null | cut -d= -f2-)
+    invocation_reason=$(grep '^last_invocation_reason=' "$status_file" 2>/dev/null | cut -d= -f2-)
+    invocation_timestamp=$(grep '^last_invocation_timestamp=' "$status_file" 2>/dev/null | cut -d= -f2-)
     exit_code=$(grep '^exit_code=' "$status_file" 2>/dev/null | cut -d= -f2)
     timestamp=$(grep '^timestamp=' "$status_file" 2>/dev/null | cut -d= -f2-)
     containers=$(grep '^containers=' "$status_file" 2>/dev/null | cut -d= -f2)
     errors=$(grep '^errors_count=' "$status_file" 2>/dev/null | cut -d= -f2)
 
+    if [ "$invocation_result" = "skipped" ]; then
+      echo -e "  ${YELLOW}Last invocation: skipped (${invocation_reason:-unknown})${NC}"
+      [ -n "$invocation_timestamp" ] && echo -e "      When: ${invocation_timestamp}"
+    fi
+
     if [ -n "$exit_code" ]; then
       if [ "$exit_code" = "0" ]; then
-        echo -e "  ${GREEN}Last run: ✅ SUCCESS${NC}"
+        echo -e "  ${GREEN}Last completed run: ✅ SUCCESS${NC}"
       else
-        echo -e "  ${RED}Last run: ❌ FAILED (exit ${exit_code})${NC}"
+        echo -e "  ${RED}Last completed run: ❌ FAILED (exit ${exit_code})${NC}"
       fi
       [ -n "$timestamp" ] && echo -e "      When: ${timestamp}"
       [ -n "$containers" ] && echo -e "      Containers: ${containers}"
