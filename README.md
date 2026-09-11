@@ -12,55 +12,6 @@ PVE-Cron-LXC-Apps-Update automates unattended **application-level** updates for 
 
 Runs [community-scripts `update-apps.sh`](https://community-scripts.org/docs/tools/pve/update-apps) against an explicitly selected allow-list of LXC containers, optionally backing them up first, then produces useful logging, status and notifications.
 
-## What it does NOT do
-
-This project is **not** a general LXC OS/package updater. It does **not** run `apt dist-upgrade`, `apk upgrade`, `dnf update`, `pacman -Syu`, `zypper dup`, or any equivalent OS-update functionality. It does **not** automatically update every LXC.
-
-It is intentionally different from Community Scripts' `cron-update-lxcs.sh` / `update-lxcs-cron.sh` (the OS updater). Only the **architectural lessons** are borrowed: a separate installer/manager, a persistent config, a stable local worker, and a last-known-good cache for the upstream script.
-
-## Architecture
-
-```text
-cron
- |
- v
-update-community-apps.sh   (stable local worker)
- |
- +--> config  /etc/update-community-apps.conf
- |
- +--> lock  (flock)
- |
- +--> refresh update-apps.sh cache
- |       |
- |       +--> failure -> last-known-good cache
- |
- +--> backup  (vzdump, when enabled)
- |
- +--> update-apps.sh  (cached upstream)
- |
- +--> logs/status
- |
- +--> Proxmox notification
- |
- +--> optional Healthchecks
-```
-
-```text
-Management / Installer  (install.sh)
-        |
-        v
-Persistent configuration  (/etc/update-community-apps.conf)
-        |
-        v
-Stable local worker  (/usr/local/bin/update-community-apps.sh)
-        |
-        v
-Cached/validated upstream update-apps.sh  (/usr/local/lib/update-community-apps/update-apps.sh)
-        |
-        v
-Community Scripts application updates
-```
-
 ## Quick Start
 
 ```bash
