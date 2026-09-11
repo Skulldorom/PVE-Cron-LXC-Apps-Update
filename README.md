@@ -46,7 +46,7 @@ Authoritative config: `/etc/update-community-apps.conf`. Cron log: `/var/log/upd
 
 ## Documentation
 
-Full operator documentation is available in [`docs/`](docs/) and is published with GitHub Pages at `https://skulldorom.github.io/PVE-Cron-LXC-Apps-Update/`.
+Full operator documentation is available in [`docs/`](docs/) and published at [skulldorom.github.io/PVE-Cron-LXC-Apps-Update](https://skulldorom.github.io/PVE-Cron-LXC-Apps-Update/).
 
 One-time Pages setup after merge: in repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**.
 

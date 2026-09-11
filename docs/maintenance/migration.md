@@ -12,7 +12,20 @@ New authoritative config:
 /etc/update-community-apps.conf
 ```
 
-After successful migration, editing the old config does not affect the updater. Migration preserves selected containers, backup storage, backup enablement, notification preference, dry-run preference, schedule, and optional advanced settings when present: `AUTO_REBOOT`, `UPSTREAM_REFRESH`, `ALLOW_CACHED_UPSTREAM`, `HEALTHCHECK_URL`. Cron is updated to invoke `/usr/local/bin/update-community-apps.sh` directly.
+After successful migration, editing the old config does not affect the updater. Migration preserves these legacy values when they exist:
+
+- selected containers from `CONTAINER_IDS`
+- backup storage from `BACKUP_STORAGE`
+- backup enablement from `BACKUP`
+- notification preference from `NOTIFY`
+- dry-run preference from `DRY_RUN`
+- cron schedule
+- `AUTO_REBOOT`
+- `UPSTREAM_REFRESH`
+- `ALLOW_CACHED_UPSTREAM`
+- `HEALTHCHECK_URL`
+
+If `AUTO_REBOOT`, `UPSTREAM_REFRESH`, `ALLOW_CACHED_UPSTREAM`, or `HEALTHCHECK_URL` are absent from the legacy config, the generated config uses the same defaults as a new install. Cron is updated to invoke `/usr/local/bin/update-community-apps.sh` directly.
 
 ## Verify migration
 
@@ -22,6 +35,13 @@ cat /etc/update-community-apps.conf
 crontab -l | grep update-community-apps
 /usr/local/bin/update-community-apps.sh --dry-run
 ```
+
+Expected results:
+
+- `/etc/update-community-apps.conf` exists and contains the migrated settings.
+- `--status` reports the new config.
+- Cron points to `/usr/local/bin/update-community-apps.sh`.
+- The dry run completes with the migrated container allow-list.
 
 ## Cleaning up legacy files
 

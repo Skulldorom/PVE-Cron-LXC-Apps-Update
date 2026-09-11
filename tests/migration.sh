@@ -44,6 +44,10 @@ BACKUP_STORAGE="pbs-backup"
 BACKUP="no"
 NOTIFY="no"
 DRY_RUN="yes"
+AUTO_REBOOT="no"
+UPSTREAM_REFRESH="no"
+ALLOW_CACHED_UPSTREAM="no"
+HEALTHCHECK_URL="https://hc-ping.example.invalid/legacy-check"
 CFG
 cat >"$CRONTAB_FILE" <<CRON
 17 3 * * 2 $WRAPPER_SCRIPT >>$LOG_FILE 2>&1
@@ -69,10 +73,10 @@ grep -q '^BACKUP="no"$' "$CONFIG_FILE" || { echo "FAIL: backup not preserved"; c
 grep -q '^BACKUP_STORAGE="pbs-backup"$' "$CONFIG_FILE" || { echo "FAIL: storage not preserved"; cat "$CONFIG_FILE"; exit 1; }
 grep -q '^NOTIFY="no"$' "$CONFIG_FILE" || { echo "FAIL: notify not preserved"; cat "$CONFIG_FILE"; exit 1; }
 grep -q '^DRY_RUN="yes"$' "$CONFIG_FILE" || { echo "FAIL: dry-run not preserved"; cat "$CONFIG_FILE"; exit 1; }
-grep -q '^AUTO_REBOOT="yes"$' "$CONFIG_FILE" || { echo "FAIL: auto-reboot default not applied"; cat "$CONFIG_FILE"; exit 1; }
-grep -q '^UPSTREAM_REFRESH="yes"$' "$CONFIG_FILE" || { echo "FAIL: upstream refresh default not applied"; cat "$CONFIG_FILE"; exit 1; }
-grep -q '^ALLOW_CACHED_UPSTREAM="yes"$' "$CONFIG_FILE" || { echo "FAIL: cache policy default not applied"; cat "$CONFIG_FILE"; exit 1; }
-grep -q '^HEALTHCHECK_URL=""$' "$CONFIG_FILE" || { echo "FAIL: healthcheck default not applied"; cat "$CONFIG_FILE"; exit 1; }
+grep -q '^AUTO_REBOOT="no"$' "$CONFIG_FILE" || { echo "FAIL: auto-reboot not preserved"; cat "$CONFIG_FILE"; exit 1; }
+grep -q '^UPSTREAM_REFRESH="no"$' "$CONFIG_FILE" || { echo "FAIL: upstream refresh not preserved"; cat "$CONFIG_FILE"; exit 1; }
+grep -q '^ALLOW_CACHED_UPSTREAM="no"$' "$CONFIG_FILE" || { echo "FAIL: cache policy not preserved"; cat "$CONFIG_FILE"; exit 1; }
+grep -q '^HEALTHCHECK_URL="https://hc-ping.example.invalid/legacy-check"$' "$CONFIG_FILE" || { echo "FAIL: healthcheck URL not preserved"; cat "$CONFIG_FILE"; exit 1; }
 grep -q "^17 3 \* \* 2 $LOCAL_SCRIPT >>$LOG_FILE 2>&1$" "$CRONTAB_FILE" || { echo "FAIL: cron not rewritten with exact schedule"; cat "$CRONTAB_FILE"; exit 1; }
 ! grep -q "$WRAPPER_SCRIPT" "$CRONTAB_FILE" || { echo "FAIL: old wrapper still in cron"; cat "$CRONTAB_FILE"; exit 1; }
 first_config_hash=$(sha256sum "$CONFIG_FILE" | awk '{print $1}')
@@ -83,6 +87,10 @@ BACKUP_STORAGE="changed-storage"
 BACKUP="yes"
 NOTIFY="yes"
 DRY_RUN="no"
+AUTO_REBOOT="yes"
+UPSTREAM_REFRESH="yes"
+ALLOW_CACHED_UPSTREAM="yes"
+HEALTHCHECK_URL="https://hc-ping.example.invalid/changed-check"
 CFG
 
 
